@@ -21,7 +21,7 @@ st.sidebar.header("⚙️ Configuração da Rede")
 
 network_type = st.sidebar.selectbox(
     "Escolha a rede",
-    ["Rede simples 3 barras", "Rede com 2 Transformadores", "Rede com Transformador Único", "Rede Personalizada", "Rede IEEE 9 barras"]
+    ["Rede simples 3 barras", "Rede com 2 Transformadores", "Rede com Transformador Único", "Rede IEEE 9 barras"]
 )
 
 # ========== PARÂMETROS EDITÁVEIS ==========
@@ -34,7 +34,7 @@ if network_type != "Rede IEEE 9 barras":
     
     if network_type in ["Rede com 2 Transformadores", "Rede com Transformador Único"]:
         with st.sidebar.expander("🔄 Transformador 1", expanded=False):
-            st.write("**Trafo 1 (Elevador)**")
+            st.write("**Trafo 1**")
             trafo1_sn = st.number_input("Potência Nominal (MVA)", value=10.0, step=1.0, key="t1_sn")
             trafo1_vn_lv = st.number_input("Tensão Baixa (kV)", value=6.9, step=0.1, key="t1_lv")
             trafo1_vn_hv = st.number_input("Tensão Alta (kV)", value=34.5, step=0.1, key="t1_hv")
@@ -43,7 +43,7 @@ if network_type != "Rede IEEE 9 barras":
     
     if network_type == "Rede com 2 Transformadores":
         with st.sidebar.expander("🔄 Transformador 2", expanded=False):
-            st.write("**Trafo 2 (Abaixador)**")
+            st.write("**Trafo 2**")
             trafo2_sn = st.number_input("Potência Nominal (MVA)", value=5.0, step=1.0, key="t2_sn")
             trafo2_vn_hv = st.number_input("Tensão Alta (kV)", value=34.5, step=0.1, key="t2_hv")
             trafo2_vn_lv = st.number_input("Tensão Baixa (kV)", value=13.8, step=0.1, key="t2_lv")
@@ -53,14 +53,18 @@ if network_type != "Rede IEEE 9 barras":
     if network_type != "Rede simples 3 barras":
         with st.sidebar.expander("🔌 Linha de Transmissão", expanded=False):
             linha_length = st.number_input("Comprimento (km)", value=100.0, step=10.0, key="l_len")
-            linha_r = st.number_input("Resistência (Ω/km)", value=0.5, step=0.1, key="l_r")
-            linha_x = st.number_input("Reatância (Ω/km)", value=0.05, step=0.01, key="l_x")
-            linha_c = st.number_input("Capacitância (kΩ×km)", value=270.0, step=10.0, key="l_c")
+            linha_r = st.number_input("Resistência (Ohm/km)", value=0.5, step=0.1, key="l_r")
+            linha_x = st.number_input("Reatância (Ohm/km)", value=0.05, step=0.01, key="l_x")
+            linha_c = st.number_input("Capacitância (kOhm x km)", value=270.0, step=10.0, key="l_c")
             linha_imax = st.number_input("Corrente Máx (kA)", value=1.0, step=0.1, key="l_imax")
     
     with st.sidebar.expander("💡 Carga", expanded=False):
-        carga_p = st.number_input("Potência Ativa (MW)", value=2.0 if network_type == "Rede simples 3 barras" else 40.0, step=1.0, key="c_p")
-        carga_fp = st.number_input("Fator de Potência", value=0.85 if network_type != "Rede simples 3 barras" else 0.9, min_value=0.1, max_value=1.0, step=0.05, key="c_fp")
+        if network_type == "Rede simples 3 barras":
+            carga_p = st.number_input("Potência Ativa (MW)", value=2.0, step=1.0, key="c_p")
+            carga_fp = st.number_input("Fator de Potência", value=0.9, min_value=0.1, max_value=1.0, step=0.05, key="c_fp")
+        else:
+            carga_p = st.number_input("Potência Ativa (MW)", value=40.0, step=1.0, key="c_p")
+            carga_fp = st.number_input("Fator de Potência", value=0.85, min_value=0.1, max_value=1.0, step=0.05, key="c_fp")
         carga_q = carga_p * np.tan(np.arccos(carga_fp))
         st.write(f"Potência Reativa: {carga_q:.2f} Mvar")
 
@@ -95,17 +99,14 @@ def create_network(network_type):
     elif network_type == "Rede com 2 Transformadores":
         net = pp.create_empty_network()
         
-        # Barras
         b_gen = pp.create_bus(net, vn_kv=trafo1_vn_lv, name="Gerador")
         b1 = pp.create_bus(net, vn_kv=trafo1_vn_lv, name="Barra 1")
         b2 = pp.create_bus(net, vn_kv=trafo1_vn_hv, name="Barra 2")
         b3 = pp.create_bus(net, vn_kv=trafo2_vn_hv, name="Barra 3")
         b4 = pp.create_bus(net, vn_kv=trafo2_vn_lv, name="Barra 4")
         
-        # Gerador
         pp.create_ext_grid(net, bus=b_gen, vm_pu=vm_pu, name="Gerador")
         
-        # Transformador 1 (Elevador)
         pp.create_transformer_from_parameters(
             net, b1, b2, sn_mva=trafo1_sn, 
             vn_hv_kv=trafo1_vn_hv, vn_lv_kv=trafo1_vn_lv,
@@ -113,14 +114,12 @@ def create_network(network_type):
             pfe_kw=0, i0_percent=0, name="Trafo 1"
         )
         
-        # Linha de transmissão
         pp.create_line_from_parameters(
             net, b2, b3, length_km=linha_length,
             r_ohm_per_km=linha_r, x_ohm_per_km=linha_x,
             c_nf_per_km=linha_c*1e6, max_i_ka=linha_imax, name="LT"
         )
         
-        # Transformador 2 (Abaixador)
         pp.create_transformer_from_parameters(
             net, b3, b4, sn_mva=trafo2_sn,
             vn_hv_kv=trafo2_vn_hv, vn_lv_kv=trafo2_vn_lv,
@@ -128,7 +127,6 @@ def create_network(network_type):
             pfe_kw=0, i0_percent=0, name="Trafo 2"
         )
         
-        # Carga
         pp.create_load(net, b4, p_mw=carga_p, q_mvar=carga_q, name="Carga")
         
         return net
@@ -136,16 +134,13 @@ def create_network(network_type):
     elif network_type == "Rede com Transformador Único":
         net = pp.create_empty_network()
         
-        # Barras
         b_gen = pp.create_bus(net, vn_kv=tensao_gerador, name="Gerador")
         b1 = pp.create_bus(net, vn_kv=trafo1_vn_lv, name="Barra 1")
         b2 = pp.create_bus(net, vn_kv=trafo1_vn_hv, name="Barra 2")
         b3 = pp.create_bus(net, vn_kv=trafo1_vn_hv, name="Barra 3")
         
-        # Gerador
         pp.create_ext_grid(net, bus=b_gen, vm_pu=vm_pu, name="Gerador")
         
-        # Transformador
         pp.create_transformer_from_parameters(
             net, b1, b2, sn_mva=trafo1_sn,
             vn_hv_kv=trafo1_vn_hv, vn_lv_kv=trafo1_vn_lv,
@@ -153,86 +148,13 @@ def create_network(network_type):
             pfe_kw=0, i0_percent=0, name="Trafo"
         )
         
-        # Linha de transmissão
         pp.create_line_from_parameters(
             net, b2, b3, length_km=linha_length,
             r_ohm_per_km=linha_r, x_ohm_per_km=linha_x,
             c_nf_per_km=linha_c*1e6, max_i_ka=linha_imax, name="LT"
         )
         
-        # Carga
         pp.create_load(net, b3, p_mw=carga_p, q_mvar=carga_q, name="Carga")
-        
-        return net
-    
-    elif network_type == "Rede Personalizada":
-        net = pp.create_empty_network()
-        
-        bger = pp.create_bus(net, vn_kv=13.8, name="GER")
-        bger_barra = pp.create_bus(net, vn_kv=13.8, name="BGER")
-        
-        blt1 = pp.create_bus(net, vn_kv=138, name="BLT1")
-        blt1o = pp.create_bus(net, vn_kv=138, name="BLT1O")
-        
-        blt2 = pp.create_bus(net, vn_kv=138, name="BLT2")
-        blt2o = pp.create_bus(net, vn_kv=138, name="BLT2O")
-        
-        blt3 = pp.create_bus(net, vn_kv=138, name="BLT3")
-        blt3o = pp.create_bus(net, vn_kv=138, name="BLT3O")
-        
-        bgch1 = pp.create_bus(net, vn_kv=13.8, name="BGCH1")
-        bgch2 = pp.create_bus(net, vn_kv=13.8, name="BGCH2")
-        bgch3 = pp.create_bus(net, vn_kv=13.8, name="BGCH3")
-        bgchm = pp.create_bus(net, vn_kv=13.8, name="BGCHM")
-        
-        pp.create_ext_grid(net, bus=bger, vm_pu=1.0, name="GER 90MVA")
-        
-        pp.create_transformer_from_parameters(
-            net, bger_barra, blt1, sn_mva=25, vn_hv_kv=138, vn_lv_kv=13.8,
-            vk_percent=6, vkr_percent=0.5, pfe_kw=0, i0_percent=0, name="TR1E"
-        )
-        pp.create_transformer_from_parameters(
-            net, bger_barra, blt2, sn_mva=25, vn_hv_kv=138, vn_lv_kv=13.8,
-            vk_percent=6, vkr_percent=0.5, pfe_kw=0, i0_percent=0, name="TR2E"
-        )
-        pp.create_transformer_from_parameters(
-            net, bger_barra, blt3, sn_mva=25, vn_hv_kv=138, vn_lv_kv=13.8,
-            vk_percent=6, vkr_percent=0.5, pfe_kw=0, i0_percent=0, name="TR3E"
-        )
-        
-        pp.create_line_from_parameters(
-            net, blt1, blt1o, length_km=100,
-            r_ohm_per_km=0.05, x_ohm_per_km=0.4,
-            c_nf_per_km=10, max_i_ka=1.0, name="LT1"
-        )
-        pp.create_line_from_parameters(
-            net, blt2, blt2o, length_km=50,
-            r_ohm_per_km=0.05, x_ohm_per_km=0.4,
-            c_nf_per_km=10, max_i_ka=1.0, name="LT2"
-        )
-        pp.create_line_from_parameters(
-            net, blt3, blt3o, length_km=50,
-            r_ohm_per_km=0.05, x_ohm_per_km=0.4,
-            c_nf_per_km=10, max_i_ka=1.0, name="LT3"
-        )
-        
-        pp.create_transformer_from_parameters(
-            net, blt1o, bgch1, sn_mva=25, vn_hv_kv=138, vn_lv_kv=13.8,
-            vk_percent=6, vkr_percent=0.5, pfe_kw=0, i0_percent=0, name="TR1A"
-        )
-        pp.create_transformer_from_parameters(
-            net, blt2o, bgch2, sn_mva=25, vn_hv_kv=138, vn_lv_kv=13.8,
-            vk_percent=6, vkr_percent=0.5, pfe_kw=0, i0_percent=0, name="TR2A"
-        )
-        pp.create_transformer_from_parameters(
-            net, blt3o, bgch3, sn_mva=25, vn_hv_kv=138, vn_lv_kv=13.8,
-            vk_percent=6, vkr_percent=0.5, pfe_kw=0, i0_percent=0, name="TR3A"
-        )
-        
-        pp.create_load(net, bgch1, p_mw=5.0, q_mvar=2.0, name="Alimentador 1")
-        pp.create_load(net, bgch2, p_mw=4.0, q_mvar=1.5, name="Alimentador 2")
-        pp.create_load(net, bgch3, p_mw=3.0, q_mvar=1.0, name="Alimentador 3")
-        pp.create_load(net, bgchm, p_mw=2.0, q_mvar=1.5, name="Motor")
         
         return net
     
@@ -248,23 +170,19 @@ def draw_system_diagram(network_type):
     if network_type == "Rede simples 3 barras":
         fig = go.Figure()
         
-        # Gerador
         fig.add_shape(type="circle", x0=0.5, y0=4.5, x1=1.5, y1=5.5,
                      line=dict(color="black", width=2))
-        fig.add_annotation(x=1, y=5, text="≈", showarrow=False, font=dict(size=20))
+        fig.add_annotation(x=1, y=5, text="~", showarrow=False, font=dict(size=20))
         
-        # Barras
         for i, x in enumerate([2, 5, 8]):
             fig.add_shape(type="line", x0=x, y0=4, x1=x, y1=6,
                          line=dict(color="black", width=3))
             fig.add_annotation(x=x, y=6.3, text=f"{i+1}", showarrow=False, font=dict(size=14))
         
-        # Linhas
         fig.add_shape(type="line", x0=1.5, y0=5, x1=2, y1=5, line=dict(color="black", width=2))
         fig.add_shape(type="line", x0=2, y0=5, x1=5, y1=5, line=dict(color="black", width=2))
         fig.add_shape(type="line", x0=5, y0=5, x1=8, y1=5, line=dict(color="black", width=2))
         
-        # Cargas
         fig.add_annotation(x=5, y=3.5, text="P+jQ", showarrow=True, 
                           arrowhead=2, arrowsize=1, arrowwidth=2, ax=0, ay=30)
         fig.add_annotation(x=8, y=3.5, text="P+jQ", showarrow=True,
@@ -281,18 +199,15 @@ def draw_system_diagram(network_type):
     elif network_type == "Rede com 2 Transformadores":
         fig = go.Figure()
         
-        # Gerador
         fig.add_shape(type="circle", x0=0.3, y0=4.5, x1=1.3, y1=5.5,
                      line=dict(color="black", width=2))
-        fig.add_annotation(x=0.8, y=5, text="≈", showarrow=False, font=dict(size=18))
+        fig.add_annotation(x=0.8, y=5, text="~", showarrow=False, font=dict(size=18))
         fig.add_annotation(x=0.8, y=3.8, text="gerador", showarrow=False, font=dict(size=10))
         fig.add_annotation(x=0.8, y=3.4, text=f"|V|={tensao_gerador}kV", showarrow=False, font=dict(size=9))
         
-        # Barra 1
         fig.add_shape(type="line", x0=2, y0=4, x1=2, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=2, y=6.3, text="①", showarrow=False, font=dict(size=14))
+        fig.add_annotation(x=2, y=6.3, text="1", showarrow=False, font=dict(size=14))
         
-        # Trafo 1
         fig.add_shape(type="circle", x0=2.7, y0=4.7, x1=3.3, y1=5.3, line=dict(color="black", width=2))
         fig.add_shape(type="circle", x0=3.3, y0=4.7, x1=3.9, y1=5.3, line=dict(color="black", width=2))
         fig.add_annotation(x=3.3, y=3.8, text="trafo 1", showarrow=False, font=dict(size=10))
@@ -301,27 +216,84 @@ def draw_system_diagram(network_type):
         fig.add_annotation(x=3.3, y=3.0, text=f"X={trafo1_vk}%", showarrow=False, font=dict(size=8))
         fig.add_annotation(x=3.3, y=2.6, text=f"{trafo1_sn}MVA", showarrow=False, font=dict(size=8))
         
-        # Barra 2
         fig.add_shape(type="line", x0=4.5, y0=4, x1=4.5, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=4.5, y=6.3, text="②", showarrow=False, font=dict(size=14))
+        fig.add_annotation(x=4.5, y=6.3, text="2", showarrow=False, font=dict(size=14))
         
-        # Linha
+        fig.add_shape(type="line", x0=4.5, y0=5, x1=7.5, y1=5, line=dict(color="black", width=2))
+        fig.add_annotation(x=6, y=5.5, text=f"{linha_length} km", showarrow=False, font=dict(size=9))
+        fig.add_annotation(x=6, y=4.7, text=f"X={linha_x} Ohm/km", showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=6, y=4.3, text=f"Xc={linha_c} kOhm x km", showarrow=False, font=dict(size=8))
+        
+        fig.add_shape(type="line", x0=7.5, y0=4, x1=7.5, y1=6, line=dict(color="black", width=3))
+        fig.add_annotation(x=7.5, y=6.3, text="3", showarrow=False, font=dict(size=14))
+        
+        fig.add_shape(type="circle", x0=8.2, y0=4.7, x1=8.8, y1=5.3, line=dict(color="black", width=2))
+        fig.add_shape(type="circle", x0=8.8, y0=4.7, x1=9.4, y1=5.3, line=dict(color="black", width=2))
+        fig.add_annotation(x=8.8, y=3.8, text="trafo 2", showarrow=False, font=dict(size=10))
+        fig.add_annotation(x=8.8, y=3.4, text=f"{trafo2_vn_hv}kV/{trafo2_vn_lv}kV",
+                          showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=8.8, y=3.0, text=f"X={trafo2_vk}%", showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=8.8, y=2.6, text=f"{trafo2_sn}MVA", showarrow=False, font=dict(size=8))
+        
+        fig.add_shape(type="line", x0=10, y0=4, x1=10, y1=6, line=dict(color="black", width=3))
+        fig.add_annotation(x=10, y=6.3, text="4", showarrow=False, font=dict(size=14))
+        
+        fig.add_annotation(x=10.5, y=5, text="carga", showarrow=False, font=dict(size=10))
+        fig.add_annotation(x=11, y=4.7, text=f"{carga_p} MW", showarrow=True,
+                          arrowhead=2, ax=-20, ay=0, font=dict(size=9))
+        fig.add_annotation(x=11, y=4.3, text=f"cos={carga_fp}", showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=11, y=3.9, text="(atrasado)", showarrow=False, font=dict(size=8))
+        
+        fig.add_shape(type="line", x0=1.3, y0=5, x1=2, y1=5, line=dict(color="black", width=2))
+        fig.add_shape(type="line", x0=2, y0=5, x1=2.7, y1=5, line=dict(color="black", width=2))
+        fig.add_shape(type="line", x0=3.9, y0=5, x1=4.5, y1=5, line=dict(color="black", width=2))
+        fig.add_shape(type="line", x0=7.5, y0=5, x1=8.2, y1=5, line=dict(color="black", width=2))
+        fig.add_shape(type="line", x0=9.4, y0=5, x1=10, y1=5, line=dict(color="black", width=2))
+        fig.add_shape(type="line", x0=10, y0=5, x1=10.5, y1=5, line=dict(color="black", width=2))
+        
+        fig.update_layout(
+            showlegend=False, height=350,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[0, 12]),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[2, 7])
+        )
+        
+        return fig
+    
+    elif network_type == "Rede com Transformador Único":
+        fig = go.Figure()
+        
+        fig.add_shape(type="circle", x0=0.3, y0=4.5, x1=1.3, y1=5.5,
+                     line=dict(color="black", width=2))
+        fig.add_annotation(x=0.8, y=5, text="~", showarrow=False, font=dict(size=18))
+        fig.add_annotation(x=0.8, y=3.8, text="gerador", showarrow=False, font=dict(size=10))
+        fig.add_annotation(x=0.8, y=3.4, text=f"|V|={tensao_gerador}kV", showarrow=False, font=dict(size=9))
+        
+        fig.add_shape(type="line", x0=2, y0=4, x1=2, y1=6, line=dict(color="black", width=3))
+        fig.add_annotation(x=2, y=6.3, text="1", showarrow=False, font=dict(size=14))
+        
+        fig.add_shape(type="circle", x0=2.7, y0=4.7, x1=3.3, y1=5.3, line=dict(color="black", width=2))
+        fig.add_shape(type="circle", x0=3.3, y0=4.7, x1=3.9, y1=5.3, line=dict(color="black", width=2))
+        fig.add_annotation(x=3.3, y=3.8, text=f"{trafo1_vn_lv}kV/{trafo1_vn_hv}kV",
+                          showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=3.3, y=3.4, text=f"X={trafo1_vk}%", showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=3.3, y=3.0, text=f"{trafo1_sn}MVA", showarrow=False, font=dict(size=8))
+        
+        fig.add_shape(type="line", x0=4.5, y0=4, x1=4.5, y1=6, line=dict(color="black", width=3))
+        fig.add_annotation(x=4.5, y=6.3, text="2", showarrow=False, font=dict(size=14))
+        
         fig.add_shape(type="line", x0=4.5, y0=5, x1=8, y1=5, line=dict(color="black", width=2))
         fig.add_annotation(x=6.2, y=5.5, text=f"{linha_length} km", showarrow=False, font=dict(size=9))
-        fig.add_annotation(x=6.2, y=4.7, text=f"X={linha_x} Ω/km", showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=6.2, y=4.3, text=f"Xc={linha_c} kΩ×km", showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=6.2, y=4.7, text=f"X={linha_x} Ohm/km", showarrow=False, font=dict(size=8))
+        fig.add_annotation(x=6.2, y=4.3, text=f"Xc={linha_c} kOhm x km", showarrow=False, font=dict(size=8))
         
-        # Barra 3
         fig.add_shape(type="line", x0=8, y0=4, x1=8, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=8, y=6.3, text="③", showarrow=False, font=dict(size=14))
+        fig.add_annotation(x=8, y=6.3, text="3", showarrow=False, font=dict(size=14))
         
-        # Carga
         fig.add_annotation(x=8.5, y=5, text="carga", showarrow=False, font=dict(size=10))
         fig.add_annotation(x=9, y=4.7, text=f"{carga_p} MW", showarrow=True,
                           arrowhead=2, ax=-20, ay=0, font=dict(size=9))
         fig.add_annotation(x=9, y=4.3, text=f"fp={carga_fp} atrasado", showarrow=False, font=dict(size=8))
         
-        # Linhas de conexão
         fig.add_shape(type="line", x0=1.3, y0=5, x1=2, y1=5, line=dict(color="black", width=2))
         fig.add_shape(type="line", x0=2, y0=5, x1=2.7, y1=5, line=dict(color="black", width=2))
         fig.add_shape(type="line", x0=3.9, y0=5, x1=4.5, y1=5, line=dict(color="black", width=2))
@@ -395,7 +367,6 @@ with col2:
 # ========== EXIBIÇÃO DOS RESULTADOS ==========
 if executar:
     
-    # BARRAS
     if "Barras" in elementos_selecionados:
         st.subheader("🔌 Tensões nas Barras")
         
@@ -414,7 +385,6 @@ if executar:
             df_barras.index = net.bus['name'].values
             st.dataframe(df_barras, use_container_width=True)
     
-    # LINHAS
     if "Linhas" in elementos_selecionados and len(net.line) > 0:
         st.subheader("⚡ Carregamento das Linhas")
         
@@ -434,7 +404,6 @@ if executar:
                 df_linhas.index = net.line['name'].values
             st.dataframe(df_linhas, use_container_width=True)
     
-    # TRANSFORMADORES
     if "Transformadores" in elementos_selecionados and len(net.trafo) > 0:
         st.subheader("🔄 Transformadores")
         
@@ -443,13 +412,11 @@ if executar:
             df_trafo.index = net.trafo['name'].values
         st.dataframe(df_trafo, use_container_width=True)
     
-    # GERADORES
     if "Geradores" in elementos_selecionados:
         st.subheader("⚙️ Geradores")
         df_gen = net.res_ext_grid[["p_mw", "q_mvar"]].copy()
         st.dataframe(df_gen, use_container_width=True)
     
-    # CARGAS
     if "Cargas" in elementos_selecionados and len(net.load) > 0:
         st.subheader("💡 Cargas")
         df_cargas = pd.DataFrame({
@@ -460,10 +427,8 @@ if executar:
             df_cargas.index = net.load['name'].values
         st.dataframe(df_cargas, use_container_width=True)
     
-    # ========== GRÁFICOS ==========
     st.header("📊 Análises Gráficas")
     
-    # PERFIL DE TENSÃO
     if "Perfil de Tensão" in graficos_selecionados:
         st.subheader("📈 Perfil de Tensão nas Barras")
         
@@ -491,7 +456,6 @@ if executar:
         
         st.plotly_chart(fig, use_container_width=True)
     
-    # CARREGAMENTO DE LINHAS
     if "Carregamento de Linhas" in graficos_selecionados and len(net.line) > 0:
         st.subheader("⚡ Carregamento das Linhas")
         
@@ -513,7 +477,6 @@ if executar:
         
         st.plotly_chart(fig, use_container_width=True)
     
-    # CURVAS DE PERTINÊNCIA
     if "Curvas de Pertinência" in graficos_selecionados:
         st.subheader("📉 Funções de Pertinência - Lógica Fuzzy")
         
@@ -573,7 +536,6 @@ if executar:
         fig.update_layout(height=600, showlegend=True)
         st.plotly_chart(fig, use_container_width=True)
     
-    # ANÁLISE TR2E
     if "Análise TR2E sob Carga" in graficos_selecionados:
         st.subheader("🔄 Análise de TR2E - Tempo sob Diferentes Ângulos")
         
@@ -598,7 +560,6 @@ if executar:
         
         st.plotly_chart(fig, use_container_width=True)
     
-    # FLUXO DE POTÊNCIA
     if "Fluxo de Potência" in graficos_selecionados:
         st.subheader("🔀 Fluxo de Potência no Sistema")
         
@@ -617,76 +578,4 @@ if executar:
                      f"{(net.res_load['p_mw'].sum() / net.res_ext_grid['p_mw'].sum() * 100):.2f} %")
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 Desenvolvido com Streamlit e pandapower") Linha
-        fig.add_shape(type="line", x0=4.5, y0=5, x1=7.5, y1=5, line=dict(color="black", width=2))
-        fig.add_annotation(x=6, y=5.5, text=f"{linha_length} km", showarrow=False, font=dict(size=9))
-        fig.add_annotation(x=6, y=4.7, text=f"X={linha_x} Ω/km", showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=6, y=4.3, text=f"Xc={linha_c} kΩ×km", showarrow=False, font=dict(size=8))
-        
-        # Barra 3
-        fig.add_shape(type="line", x0=7.5, y0=4, x1=7.5, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=7.5, y=6.3, text="③", showarrow=False, font=dict(size=14))
-        
-        # Trafo 2
-        fig.add_shape(type="circle", x0=8.2, y0=4.7, x1=8.8, y1=5.3, line=dict(color="black", width=2))
-        fig.add_shape(type="circle", x0=8.8, y0=4.7, x1=9.4, y1=5.3, line=dict(color="black", width=2))
-        fig.add_annotation(x=8.8, y=3.8, text="trafo 2", showarrow=False, font=dict(size=10))
-        fig.add_annotation(x=8.8, y=3.4, text=f"{trafo2_vn_hv}kV/{trafo2_vn_lv}kV",
-                          showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=8.8, y=3.0, text=f"X={trafo2_vk}%", showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=8.8, y=2.6, text=f"{trafo2_sn}MVA", showarrow=False, font=dict(size=8))
-        
-        # Barra 4
-        fig.add_shape(type="line", x0=10, y0=4, x1=10, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=10, y=6.3, text="④", showarrow=False, font=dict(size=14))
-        
-        # Carga
-        fig.add_annotation(x=10.5, y=5, text="carga", showarrow=False, font=dict(size=10))
-        fig.add_annotation(x=11, y=4.7, text=f"{carga_p} MW", showarrow=True,
-                          arrowhead=2, ax=-20, ay=0, font=dict(size=9))
-        fig.add_annotation(x=11, y=4.3, text=f"cosφ={carga_fp}", showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=11, y=3.9, text="(atrasado)", showarrow=False, font=dict(size=8))
-        
-        # Linhas de conexão
-        fig.add_shape(type="line", x0=1.3, y0=5, x1=2, y1=5, line=dict(color="black", width=2))
-        fig.add_shape(type="line", x0=2, y0=5, x1=2.7, y1=5, line=dict(color="black", width=2))
-        fig.add_shape(type="line", x0=3.9, y0=5, x1=4.5, y1=5, line=dict(color="black", width=2))
-        fig.add_shape(type="line", x0=7.5, y0=5, x1=8.2, y1=5, line=dict(color="black", width=2))
-        fig.add_shape(type="line", x0=9.4, y0=5, x1=10, y1=5, line=dict(color="black", width=2))
-        fig.add_shape(type="line", x0=10, y0=5, x1=10.5, y1=5, line=dict(color="black", width=2))
-        
-        fig.update_layout(
-            showlegend=False, height=350,
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[0, 12]),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[2, 7])
-        )
-        
-        return fig
-    
-    elif network_type == "Rede com Transformador Único":
-        fig = go.Figure()
-        
-        # Gerador
-        fig.add_shape(type="circle", x0=0.3, y0=4.5, x1=1.3, y1=5.5,
-                     line=dict(color="black", width=2))
-        fig.add_annotation(x=0.8, y=5, text="≈", showarrow=False, font=dict(size=18))
-        fig.add_annotation(x=0.8, y=3.8, text="gerador", showarrow=False, font=dict(size=10))
-        fig.add_annotation(x=0.8, y=3.4, text=f"|V|={tensao_gerador}kV", showarrow=False, font=dict(size=9))
-        
-        # Barra 1
-        fig.add_shape(type="line", x0=2, y0=4, x1=2, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=2, y=6.3, text="①", showarrow=False, font=dict(size=14))
-        
-        # Trafo
-        fig.add_shape(type="circle", x0=2.7, y0=4.7, x1=3.3, y1=5.3, line=dict(color="black", width=2))
-        fig.add_shape(type="circle", x0=3.3, y0=4.7, x1=3.9, y1=5.3, line=dict(color="black", width=2))
-        fig.add_annotation(x=3.3, y=3.8, text=f"{trafo1_vn_lv}kV/{trafo1_vn_hv}kV",
-                          showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=3.3, y=3.4, text=f"X={trafo1_vk}%", showarrow=False, font=dict(size=8))
-        fig.add_annotation(x=3.3, y=3.0, text=f"{trafo1_sn}MVA", showarrow=False, font=dict(size=8))
-        
-        # Barra 2
-        fig.add_shape(type="line", x0=4.5, y0=4, x1=4.5, y1=6, line=dict(color="black", width=3))
-        fig.add_annotation(x=4.5, y=6.3, text="②", showarrow=False, font=dict(size=14))
-        
-        #
+st.sidebar.info("💡 Desenvolvido com Streamlit e pandapower")
