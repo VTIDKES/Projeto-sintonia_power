@@ -1,6 +1,5 @@
 # STREAMLIT + PANDAPOWER - Análise Completa
 # Sistemas Elétricos de Potência
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -1054,3 +1053,4 @@ def main():
 
 # Executar aplicação
 if __name__ == "__main__":
+    main()
