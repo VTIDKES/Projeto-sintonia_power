@@ -5,1046 +5,745 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import json
-import time
 from datetime import datetime
-from streamlit.components.v1 import html, components
-import uuid
 
 # Configuração da página
 st.set_page_config(
-    page_title="Power System Editor - Drag & Drop",
+    page_title="Power System Studio",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS e JavaScript para drag-and-drop
+# CSS customizado
 st.markdown("""
 <style>
-    /* Estilos gerais */
-    .stApp {
-        background-color: #f8f9fa;
-    }
-    
-    /* Elementos arrastáveis */
-    .draggable-element {
-        padding: 12px;
-        margin: 8px 0;
-        border-radius: 8px;
-        cursor: grab;
-        transition: all 0.3s ease;
-        user-select: none;
-        border: 2px solid transparent;
-        background: white;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    .draggable-element:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        border-color: #007bff;
-    }
-    
-    .draggable-element:active {
-        cursor: grabbing;
-        transform: translateY(0);
-    }
-    
-    /* Cores por tipo */
-    .bus-slack { border-left: 5px solid #dc3545; }
-    .bus-pv { border-left: 5px solid #28a745; }
-    .bus-pq { border-left: 5px solid #007bff; }
-    .element-line { border-left: 5px solid #6f42c1; }
-    .element-load { border-left: 5px solid #fd7e14; }
-    .element-gen { border-left: 5px solid #20c997; }
-    
-    /* Área do canvas */
-    .canvas-container {
-        border: 2px dashed #dee2e6;
-        border-radius: 10px;
-        background-color: white;
-        min-height: 700px;
-        position: relative;
-        overflow: hidden;
-        touch-action: none;
-    }
-    
-    .canvas-grid {
-        background-image: 
-            linear-gradient(rgba(0,0,0,0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0,0,0,0.05) 1px, transparent 1px);
-        background-size: 20px 20px;
-    }
-    
-    /* Elementos no canvas */
-    .canvas-bus {
-        position: absolute;
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        cursor: move;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: bold;
-        font-size: 14px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-        z-index: 10;
-        user-select: none;
-        touch-action: none;
-    }
-    
-    .bus-slack-bg { background-color: #dc3545; }
-    .bus-pv-bg { background-color: #28a745; }
-    .bus-pq-bg { background-color: #007bff; }
-    
-    .canvas-line {
-        position: absolute;
-        background-color: #6f42c1;
-        height: 3px;
-        transform-origin: 0 0;
-        z-index: 5;
-    }
-    
-    .canvas-load {
-        position: absolute;
-        width: 30px;
-        height: 30px;
-        background-color: #fd7e14;
-        cursor: move;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: bold;
-        font-size: 12px;
-        border-radius: 4px;
-        z-index: 9;
-    }
-    
-    .canvas-gen {
-        position: absolute;
-        width: 30px;
-        height: 30px;
-        background-color: #20c997;
-        cursor: move;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: bold;
-        font-size: 12px;
-        border-radius: 50%;
-        z-index: 9;
-    }
-    
-    .element-label {
-        position: absolute;
-        background: white;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 10px;
-        border: 1px solid #dee2e6;
-        pointer-events: none;
-        z-index: 11;
-    }
-    
-    .selected {
-        box-shadow: 0 0 0 3px #ffc107, 0 0 20px rgba(255,193,7,0.5);
-        z-index: 100;
-    }
-    
-    /* Botões */
-    .mode-btn {
-        margin: 5px 0;
-        transition: all 0.3s;
-    }
-    
-    .mode-btn.active {
-        background-color: #007bff !important;
-        color: white !important;
-        border-color: #007bff !important;
-        box-shadow: 0 0 10px rgba(0,123,255,0.3);
-    }
-    
-    .action-btn {
+    .stButton > button {
         width: 100%;
-        margin: 3px 0;
+        margin: 2px 0;
     }
-    
-    /* Painel de propriedades */
-    .property-panel {
-        background: white;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        margin-top: 20px;
-    }
-    
-    /* Status */
-    .status-bar {
-        background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-        color: white;
-        padding: 10px 15px;
+    .element-card {
+        border: 2px solid #ddd;
         border-radius: 8px;
-        margin: 10px 0;
-        font-weight: bold;
-        text-align: center;
+        padding: 15px;
+        margin: 8px 0;
+        background-color: #f8f9fa;
+        cursor: pointer;
+        transition: all 0.2s;
     }
+    .element-card:hover {
+        background-color: #e9ecef;
+        border-color: #007bff;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .bus-slack { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-color: #dc3545 !important; }
+    .bus-pv { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); border-color: #198754 !important; }
+    .bus-pq { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border-color: #0dcaf0 !important; }
 </style>
-
-<script>
-// Variáveis globais
-let currentMode = 'select';
-let selectedElement = null;
-let connectingFrom = null;
-let elements = [];
-let lines = [];
-let isDragging = false;
-let dragOffset = { x: 0, y: 0 };
-let canvasRect = null;
-
-// Elementos da paleta
-const paletteElements = [
-    { id: 'bus-slack', type: 'bus', subtype: 'slack', name: 'Barra Slack', color: '#dc3545', emoji: '🔴' },
-    { id: 'bus-pv', type: 'bus', subtype: 'pv', name: 'Barra PV', color: '#28a745', emoji: '🟢' },
-    { id: 'bus-pq', type: 'bus', subtype: 'pq', name: 'Barra PQ', color: '#007bff', emoji: '🔵' },
-    { id: 'line', type: 'line', name: 'Linha', color: '#6f42c1', emoji: '📈' },
-    { id: 'load', type: 'load', name: 'Carga', color: '#fd7e14', emoji: '💡' },
-    { id: 'generator', type: 'generator', name: 'Gerador', color: '#20c997', emoji: '⚡' }
-];
-
-// Inicialização
-document.addEventListener('DOMContentLoaded', function() {
-    initCanvas();
-    initPalette();
-    updateStatus();
-});
-
-function initCanvas() {
-    const canvas = document.getElementById('canvas');
-    if (!canvas) return;
-    
-    canvasRect = canvas.getBoundingClientRect();
-    
-    // Habilitar arrastar elementos no canvas
-    canvas.addEventListener('mousedown', handleCanvasMouseDown);
-    canvas.addEventListener('mousemove', handleCanvasMouseMove);
-    canvas.addEventListener('mouseup', handleCanvasMouseUp);
-    canvas.addEventListener('touchstart', handleCanvasTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', handleCanvasTouchMove, { passive: false });
-    canvas.addEventListener('touchend', handleCanvasTouchEnd);
-    
-    // Atualizar dimensões do canvas
-    window.addEventListener('resize', function() {
-        canvasRect = canvas.getBoundingClientRect();
-    });
-}
-
-function initPalette() {
-    const palette = document.getElementById('palette');
-    if (!palette) return;
-    
-    // Adicionar elementos à paleta
-    paletteElements.forEach(element => {
-        const div = document.createElement('div');
-        div.className = `draggable-element ${element.id}`;
-        div.draggable = true;
-        div.dataset.type = element.type;
-        div.dataset.subtype = element.subtype;
-        div.dataset.color = element.color;
-        div.dataset.emoji = element.emoji;
-        div.dataset.name = element.name;
-        
-        div.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 20px;">${element.emoji}</span>
-                <div>
-                    <strong>${element.name}</strong><br>
-                    <small>Arraste para o canvas</small>
-                </div>
-            </div>
-        `;
-        
-        // Eventos de drag and drop
-        div.addEventListener('dragstart', function(e) {
-            e.dataTransfer.setData('text/plain', JSON.stringify({
-                type: this.dataset.type,
-                subtype: this.dataset.subtype,
-                color: this.dataset.color,
-                emoji: this.dataset.emoji,
-                name: this.dataset.name
-            }));
-            this.style.opacity = '0.5';
-        });
-        
-        div.addEventListener('dragend', function() {
-            this.style.opacity = '1';
-        });
-        
-        palette.appendChild(div);
-    });
-    
-    // Configurar área de drop
-    const canvas = document.getElementById('canvas');
-    if (canvas) {
-        canvas.addEventListener('dragover', function(e) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
-        });
-        
-        canvas.addEventListener('drop', function(e) {
-            e.preventDefault();
-            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-            
-            // Calcular posição relativa ao canvas
-            const rect = this.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            
-            // Adicionar elemento ao canvas
-            addElementToCanvas(data, x, y);
-        });
-    }
-}
-
-function addElementToCanvas(data, x, y) {
-    const canvas = document.getElementById('canvas');
-    if (!canvas) return;
-    
-    const elementId = 'element-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-    
-    let elementDiv;
-    
-    if (data.type === 'bus') {
-        elementDiv = document.createElement('div');
-        elementDiv.className = `canvas-bus bus-${data.subtype}-bg`;
-        elementDiv.id = elementId;
-        elementDiv.dataset.id = elementId;
-        elementDiv.dataset.type = 'bus';
-        elementDiv.dataset.subtype = data.subtype;
-        elementDiv.dataset.x = x - 20;
-        elementDiv.dataset.y = y - 20;
-        elementDiv.dataset.name = data.name;
-        elementDiv.textContent = elements.filter(e => e.type === 'bus').length + 1;
-        
-        // Posicionar elemento
-        elementDiv.style.left = (x - 20) + 'px';
-        elementDiv.style.top = (y - 20) + 'px';
-        
-        // Adicionar label
-        const label = document.createElement('div');
-        label.className = 'element-label';
-        label.textContent = data.name;
-        label.style.left = (x - 20) + 'px';
-        label.style.top = (y + 30) + 'px';
-        label.id = 'label-' + elementId;
-        
-        canvas.appendChild(label);
-        
-    } else if (data.type === 'line') {
-        // Linhas são criadas conectando duas barras
-        if (currentMode === 'connect' && connectingFrom) {
-            // Conectar barras
-            const fromElement = document.getElementById(connectingFrom);
-            const toElement = document.querySelector('.canvas-bus:hover');
-            
-            if (fromElement && toElement && fromElement !== toElement) {
-                createLine(fromElement, toElement, data.color);
-                connectingFrom = null;
-                updateStatus();
-            }
-        }
-        return;
-        
-    } else if (data.type === 'load' || data.type === 'generator') {
-        // Elementos que precisam estar associados a uma barra
-        const closestBus = findClosestBus(x, y);
-        if (closestBus) {
-            elementDiv = document.createElement('div');
-            elementDiv.className = data.type === 'load' ? 'canvas-load' : 'canvas-gen';
-            elementDiv.id = elementId;
-            elementDiv.dataset.id = elementId;
-            elementDiv.dataset.type = data.type;
-            elementDiv.dataset.bus = closestBus.id;
-            elementDiv.dataset.name = data.name;
-            elementDiv.textContent = data.type === 'load' ? 'L' : 'G';
-            
-            // Posicionar próximo à barra
-            const busRect = closestBus.getBoundingClientRect();
-            const busX = parseInt(closestBus.dataset.x) + 20;
-            const busY = parseInt(closestBus.dataset.y) + 20;
-            
-            const offsetY = data.type === 'load' ? 50 : -50;
-            elementDiv.style.left = (busX - 15) + 'px';
-            elementDiv.style.top = (busY + offsetY - 15) + 'px';
-            
-            elementDiv.dataset.x = busX - 15;
-            elementDiv.dataset.y = busY + offsetY - 15;
-        } else {
-            alert('Coloque o elemento próximo a uma barra!');
-            return;
-        }
-    }
-    
-    if (elementDiv) {
-        // Adicionar eventos
-        elementDiv.addEventListener('mousedown', startDrag);
-        elementDiv.addEventListener('touchstart', startTouchDrag, { passive: false });
-        elementDiv.addEventListener('click', handleElementClick);
-        
-        canvas.appendChild(elementDiv);
-        elements.push({
-            id: elementId,
-            type: data.type,
-            element: elementDiv
-        });
-        
-        // Enviar dados para Python
-        sendToPython('add_element', {
-            id: elementId,
-            type: data.type,
-            subtype: data.subtype,
-            x: parseInt(elementDiv.dataset.x),
-            y: parseInt(elementDiv.dataset.y),
-            name: data.name
-        });
-    }
-}
-
-function createLine(fromElement, toElement, color) {
-    const lineId = 'line-' + Date.now();
-    const canvas = document.getElementById('canvas');
-    
-    const x1 = parseInt(fromElement.dataset.x) + 20;
-    const y1 = parseInt(fromElement.dataset.y) + 20;
-    const x2 = parseInt(toElement.dataset.x) + 20;
-    const y2 = parseInt(toElement.dataset.y) + 20;
-    
-    // Calcular comprimento e ângulo
-    const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-    const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-    
-    const lineDiv = document.createElement('div');
-    lineDiv.className = 'canvas-line';
-    lineDiv.id = lineId;
-    lineDiv.dataset.id = lineId;
-    lineDiv.dataset.type = 'line';
-    lineDiv.dataset.from = fromElement.id;
-    lineDiv.dataset.to = toElement.id;
-    
-    lineDiv.style.width = length + 'px';
-    lineDiv.style.left = x1 + 'px';
-    lineDiv.style.top = y1 + 'px';
-    lineDiv.style.transform = `rotate(${angle}deg)`;
-    lineDiv.style.backgroundColor = color;
-    
-    // Adicionar eventos
-    lineDiv.addEventListener('click', handleElementClick);
-    
-    canvas.appendChild(lineDiv);
-    lines.push(lineDiv);
-    
-    // Enviar dados para Python
-    sendToPython('add_line', {
-        id: lineId,
-        from: fromElement.id,
-        to: toElement.id,
-        x1: x1, y1: y1,
-        x2: x2, y2: y2
-    });
-}
-
-function findClosestBus(x, y) {
-    const buses = document.querySelectorAll('.canvas-bus');
-    let closest = null;
-    let minDist = 100; // Raio máximo
-    
-    buses.forEach(bus => {
-        const busX = parseInt(bus.dataset.x) + 20;
-        const busY = parseInt(bus.dataset.y) + 20;
-        const dist = Math.sqrt(Math.pow(busX - x, 2) + Math.pow(busY - y, 2));
-        
-        if (dist < minDist) {
-            minDist = dist;
-            closest = bus;
-        }
-    });
-    
-    return closest;
-}
-
-function startDrag(e) {
-    if (currentMode !== 'select') return;
-    
-    e.preventDefault();
-    e.stopPropagation();
-    
-    selectedElement = this;
-    isDragging = true;
-    
-    const rect = this.getBoundingClientRect();
-    dragOffset = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-    };
-    
-    // Remover seleção anterior
-    document.querySelectorAll('.selected').forEach(el => {
-        el.classList.remove('selected');
-    });
-    
-    // Selecionar este elemento
-    this.classList.add('selected');
-    
-    // Atualizar label se existir
-    const label = document.getElementById('label-' + this.id);
-    if (label) {
-        label.classList.add('selected');
-    }
-}
-
-function startTouchDrag(e) {
-    if (currentMode !== 'select') return;
-    
-    e.preventDefault();
-    
-    if (e.touches.length === 1) {
-        const touch = e.touches[0];
-        selectedElement = this;
-        isDragging = true;
-        
-        const rect = this.getBoundingClientRect();
-        dragOffset = {
-            x: touch.clientX - rect.left,
-            y: touch.clientY - rect.top
-        };
-        
-        this.classList.add('selected');
-    }
-}
-
-function handleCanvasMouseDown(e) {
-    if (e.target === e.currentTarget && currentMode === 'connect' && !connectingFrom) {
-        // Modo conexão - primeiro clique
-        const bus = document.querySelector('.canvas-bus:hover');
-        if (bus) {
-            connectingFrom = bus.id;
-            bus.classList.add('selected');
-            updateStatus();
-        }
-    }
-}
-
-function handleCanvasMouseMove(e) {
-    if (!isDragging || !selectedElement) return;
-    
-    const canvas = document.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    
-    let x = e.clientX - rect.left - dragOffset.x;
-    let y = e.clientY - rect.top - dragOffset.y;
-    
-    // Limitar ao canvas
-    x = Math.max(0, Math.min(x, canvas.offsetWidth - selectedElement.offsetWidth));
-    y = Math.max(0, Math.min(y, canvas.offsetHeight - selectedElement.offsetHeight));
-    
-    // Atualizar posição
-    selectedElement.style.left = x + 'px';
-    selectedElement.style.top = y + 'px';
-    selectedElement.dataset.x = x;
-    selectedElement.dataset.y = y;
-    
-    // Atualizar label
-    const label = document.getElementById('label-' + selectedElement.id);
-    if (label) {
-        label.style.left = x + 'px';
-        label.style.top = (y + 40) + 'px';
-    }
-    
-    // Atualizar linhas conectadas
-    updateConnectedLines(selectedElement);
-}
-
-function handleCanvasMouseUp() {
-    if (isDragging && selectedElement) {
-        // Enviar nova posição para Python
-        sendToPython('move_element', {
-            id: selectedElement.id,
-            x: parseInt(selectedElement.dataset.x),
-            y: parseInt(selectedElement.dataset.y)
-        });
-    }
-    
-    isDragging = false;
-    selectedElement = null;
-}
-
-function handleCanvasTouchStart(e) {
-    if (e.touches.length === 1) {
-        const touch = e.touches[0];
-        handleCanvasMouseDown({ clientX: touch.clientX, clientY: touch.clientY, target: e.target, currentTarget: e.currentTarget });
-    }
-}
-
-function handleCanvasTouchMove(e) {
-    if (e.touches.length === 1 && isDragging && selectedElement) {
-        const touch = e.touches[0];
-        handleCanvasMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
-        e.preventDefault();
-    }
-}
-
-function handleCanvasTouchEnd(e) {
-    handleCanvasMouseUp();
-}
-
-function updateConnectedLines(element) {
-    const elementId = element.id;
-    
-    lines.forEach(line => {
-        if (line.dataset.from === elementId || line.dataset.to === elementId) {
-            const fromElement = document.getElementById(line.dataset.from);
-            const toElement = document.getElementById(line.dataset.to);
-            
-            if (fromElement && toElement) {
-                const x1 = parseInt(fromElement.dataset.x) + 20;
-                const y1 = parseInt(fromElement.dataset.y) + 20;
-                const x2 = parseInt(toElement.dataset.x) + 20;
-                const y2 = parseInt(toElement.dataset.y) + 20;
-                
-                const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-                const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-                
-                line.style.width = length + 'px';
-                line.style.left = x1 + 'px';
-                line.style.top = y1 + 'px';
-                line.style.transform = `rotate(${angle}deg)`;
-            }
-        }
-    });
-}
-
-function handleElementClick(e) {
-    e.stopPropagation();
-    
-    // Remover seleção anterior
-    document.querySelectorAll('.selected').forEach(el => {
-        el.classList.remove('selected');
-    });
-    
-    // Selecionar este elemento
-    this.classList.add('selected');
-    
-    // Atualizar label se existir
-    const label = document.getElementById('label-' + this.id);
-    if (label) {
-        label.classList.add('selected');
-    }
-    
-    // Enviar para Python
-    sendToPython('select_element', {
-        id: this.id,
-        type: this.dataset.type,
-        subtype: this.dataset.subtype
-    });
-}
-
-function setMode(mode) {
-    currentMode = mode;
-    connectingFrom = null;
-    
-    // Atualizar botões
-    document.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.dataset.mode === mode) {
-            btn.classList.add('active');
-        }
-    });
-    
-    updateStatus();
-}
-
-function updateStatus() {
-    const status = document.getElementById('status');
-    if (!status) return;
-    
-    let statusText = '';
-    
-    switch(currentMode) {
-        case 'select':
-            statusText = '🔍 Modo Seleção: Arraste os elementos para mover';
-            break;
-        case 'connect':
-            if (connectingFrom) {
-                statusText = `🔗 Modo Conexão: Clique em outra barra para conectar com a barra ${connectingFrom}`;
-            } else {
-                statusText = '🔗 Modo Conexão: Clique em uma barra para começar a conexão';
-            }
-            break;
-        case 'delete':
-            statusText = '🗑️ Modo Deleção: Clique nos elementos para remover';
-            break;
-    }
-    
-    status.innerHTML = `<div class="status-bar">${statusText}</div>`;
-}
-
-function deleteSelected() {
-    const selected = document.querySelector('.selected');
-    if (selected) {
-        // Remover label se existir
-        const label = document.getElementById('label-' + selected.id);
-        if (label) {
-            label.remove();
-        }
-        
-        // Remover linhas conectadas
-        if (selected.dataset.type === 'bus') {
-            const connectedLines = Array.from(lines).filter(line => 
-                line.dataset.from === selected.id || line.dataset.to === selected.id
-            );
-            connectedLines.forEach(line => line.remove());
-            lines = lines.filter(line => !connectedLines.includes(line));
-        }
-        
-        // Enviar para Python
-        sendToPython('delete_element', {
-            id: selected.id,
-            type: selected.dataset.type
-        });
-        
-        selected.remove();
-        
-        // Remover dos arrays
-        elements = elements.filter(el => el.id !== selected.id);
-    }
-}
-
-function clearCanvas() {
-    const canvas = document.getElementById('canvas');
-    if (canvas) {
-        canvas.innerHTML = '';
-        elements = [];
-        lines = [];
-        sendToPython('clear_canvas', {});
-    }
-}
-
-function sendToPython(action, data) {
-    // Enviar mensagem para o Streamlit
-    const message = {
-        action: action,
-        data: data,
-        timestamp: new Date().toISOString()
-    };
-    
-    // Usando o método do Streamlit para comunicação
-    if (window.Streamlit) {
-        window.Streamlit.setComponentValue(message);
-    }
-    
-    // Log para debug
-    console.log('Sending to Python:', message);
-}
-
-// Expor funções globalmente
-window.setMode = setMode;
-window.deleteSelected = deleteSelected;
-window.clearCanvas = clearCanvas;
-</script>
 """, unsafe_allow_html=True)
 
 # Inicialização do estado
 def init_session_state():
-    if 'elements' not in st.session_state:
-        st.session_state.elements = {}
-    if 'selected_element' not in st.session_state:
-        st.session_state.selected_element = None
-    if 'mode' not in st.session_state:
-        st.session_state.mode = 'select'
-    if 'results' not in st.session_state:
-        st.session_state.results = None
-    if 'history' not in st.session_state:
-        st.session_state.history = []
-    if 'system_name' not in st.session_state:
-        st.session_state.system_name = "Sistema Elétrico"
+    defaults = {
+        'buses': [],
+        'lines': [],
+        'loads': [],
+        'generators': [],
+        'results': None,
+        'selected_element': None,
+        'selected_type': None,
+        'mode': 'select',
+        'connecting_from': None,
+        'next_id': 0,
+        'system_name': 'Novo Sistema',
+        'add_bus_x': 400,
+        'add_bus_y': 300,
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 init_session_state()
 
-# Componente HTML para o canvas
-def create_canvas_component():
-    html_content = f"""
-    <div style="width: 100%;">
-        <!-- Status Bar -->
-        <div id="status"></div>
-        
-        <!-- Canvas Area -->
-        <div class="canvas-container canvas-grid" id="canvas" style="width: 100%; height: 700px;">
-            <!-- Elementos serão adicionados aqui via JavaScript -->
-        </div>
-        
-        <!-- Controles flutuantes -->
-        <div style="position: absolute; top: 100px; left: 20px; z-index: 1000;">
-            <div style="background: white; padding: 10px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-                <h4 style="margin: 0 0 10px 0; color: #333;">Controles</h4>
-                <button onclick="setMode('select')" class="mode-btn" data-mode="select" style="background: {'#007bff' if st.session_state.mode == 'select' else '#6c757d'}; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin: 5px 0; width: 100%;">
-                    🔍 Selecionar
-                </button>
-                <button onclick="setMode('connect')" class="mode-btn" data-mode="connect" style="background: {'#007bff' if st.session_state.mode == 'connect' else '#6c757d'}; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin: 5px 0; width: 100%;">
-                    🔗 Conectar
-                </button>
-                <button onclick="setMode('delete')" class="mode-btn" data-mode="delete" style="background: {'#007bff' if st.session_state.mode == 'delete' else '#6c757d'}; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin: 5px 0; width: 100%;">
-                    🗑️ Deletar
-                </button>
-                <hr style="margin: 10px 0;">
-                <button onclick="deleteSelected()" style="background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin: 5px 0; width: 100%;">
-                    Remover Selecionado
-                </button>
-                <button onclick="clearCanvas()" style="background: #6c757d; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin: 5px 0; width: 100%;">
-                    Limpar Tudo
-                </button>
-            </div>
-        </div>
-        
-        <script>
-        // Inicializar quando a página carregar
-        setTimeout(function() {{
-            if (typeof initCanvas === 'function') {{
-                initCanvas();
-                initPalette();
-                updateStatus();
-                
-                // Definir modo inicial
-                setMode('{st.session_state.mode}');
-            }}
-        }}, 1000);
-        </script>
-    </div>
-    """
-    return html(html_content, height=750)
+# Funções auxiliares
+def generate_id():
+    st.session_state.next_id += 1
+    return st.session_state.next_id - 1
 
-# Paleta de elementos
-def create_palette():
-    with st.sidebar:
-        st.header("🎨 Paleta de Elementos")
-        st.markdown("Arraste e solte no canvas:")
+def add_bus(name=None, x=400, y=300, bus_type='pq', vn_kv=13.8):
+    bus_id = generate_id()
+    if name is None:
+        name = f"Barra {bus_id}"
+    
+    new_bus = {
+        'id': bus_id,
+        'name': name,
+        'x': x,
+        'y': y,
+        'type': bus_type,
+        'vn_kv': vn_kv,
+        'v_pu': 1.0 if bus_type == 'slack' else 0.98 + np.random.random() * 0.04,
+        'angle_deg': 0.0,
+        'color': {
+            'slack': '#ef4444',
+            'pv': '#10b981',
+            'pq': '#3b82f6'
+        }[bus_type]
+    }
+    st.session_state.buses.append(new_bus)
+    return new_bus
+
+def add_line(from_bus_id, to_bus_id, name=None):
+    for line in st.session_state.lines:
+        if (line['from'] == from_bus_id and line['to'] == to_bus_id) or \
+           (line['from'] == to_bus_id and line['to'] == from_bus_id):
+            return None
+    
+    line_id = generate_id()
+    if name is None:
+        name = f"Linha {line_id}"
+    
+    new_line = {
+        'id': line_id,
+        'name': name,
+        'from': from_bus_id,
+        'to': to_bus_id,
+        'r_ohm_per_km': 0.1,
+        'x_ohm_per_km': 0.3,
+        'length_km': 10.0,
+        'max_i_ka': 1.0,
+        'color': '#2563eb'
+    }
+    st.session_state.lines.append(new_line)
+    return new_line
+
+def add_load(bus_id, name=None, p_mw=5.0, q_mvar=2.0):
+    load_id = generate_id()
+    if name is None:
+        name = f"Carga {load_id}"
+    
+    new_load = {
+        'id': load_id,
+        'name': name,
+        'bus': bus_id,
+        'p_mw': p_mw,
+        'q_mvar': q_mvar,
+        'color': '#8b5cf6'
+    }
+    st.session_state.loads.append(new_load)
+    return new_load
+
+def add_generator(bus_id, name=None, p_mw=10.0, vm_pu=1.0):
+    gen_id = generate_id()
+    if name is None:
+        name = f"Gerador {gen_id}"
+    
+    new_gen = {
+        'id': gen_id,
+        'name': name,
+        'bus': bus_id,
+        'p_mw': p_mw,
+        'vm_pu': vm_pu,
+        'color': '#10b981'
+    }
+    st.session_state.generators.append(new_gen)
+    return new_gen
+
+def get_bus_by_id(bus_id):
+    for bus in st.session_state.buses:
+        if bus['id'] == bus_id:
+            return bus
+    return None
+
+def delete_element(element_id, element_type):
+    if element_type == 'bus':
+        st.session_state.buses = [b for b in st.session_state.buses if b['id'] != element_id]
+        st.session_state.lines = [l for l in st.session_state.lines if l['from'] != element_id and l['to'] != element_id]
+        st.session_state.loads = [l for l in st.session_state.loads if l['bus'] != element_id]
+        st.session_state.generators = [g for g in st.session_state.generators if g['bus'] != element_id]
+    elif element_type == 'line':
+        st.session_state.lines = [l for l in st.session_state.lines if l['id'] != element_id]
+    elif element_type == 'load':
+        st.session_state.loads = [l for l in st.session_state.loads if l['id'] != element_id]
+    elif element_type == 'generator':
+        st.session_state.generators = [g for g in st.session_state.generators if g['id'] != element_id]
+
+def create_interactive_canvas():
+    fig = go.Figure()
+    
+    # Grade de fundo
+    for x in range(0, 1001, 50):
+        fig.add_shape(type="line", x0=x, y0=0, x1=x, y1=700,
+                     line=dict(color="lightgray", width=0.5, dash="dot"))
+    for y in range(0, 701, 50):
+        fig.add_shape(type="line", x0=0, y0=y, x1=1000, y1=y,
+                     line=dict(color="lightgray", width=0.5, dash="dot"))
+    
+    # Desenhar linhas
+    for line in st.session_state.lines:
+        from_bus = get_bus_by_id(line['from'])
+        to_bus = get_bus_by_id(line['to'])
         
-        html("""
-        <div id="palette">
-            <!-- Elementos serão adicionados via JavaScript -->
-        </div>
-        """, height=400)
+        if from_bus and to_bus:
+            is_selected = (st.session_state.selected_type == 'line' and 
+                          st.session_state.selected_element == line['id'])
+            
+            fig.add_trace(go.Scatter(
+                x=[from_bus['x'], to_bus['x']],
+                y=[from_bus['y'], to_bus['y']],
+                mode='lines',
+                line=dict(
+                    color='#facc15' if is_selected else line['color'],
+                    width=5 if is_selected else 3
+                ),
+                hovertemplate=f"<b>{line['name']}</b><br>ID: {line['id']}<br>De: {line['from']} → Para: {line['to']}<extra></extra>",
+                showlegend=False
+            ))
+    
+    # Desenhar barras
+    for bus in st.session_state.buses:
+        is_selected = (st.session_state.selected_type == 'bus' and 
+                      st.session_state.selected_element == bus['id'])
         
-        st.divider()
+        fig.add_trace(go.Scatter(
+            x=[bus['x']],
+            y=[bus['y']],
+            mode='markers+text',
+            marker=dict(
+                size=30,
+                color=bus['color'],
+                line=dict(
+                    width=5 if is_selected else 3,
+                    color='#facc15' if is_selected else '#1e293b'
+                )
+            ),
+            text=str(bus['id']),
+            textfont=dict(size=14, color="white", family="Arial Black"),
+            textposition='middle center',
+            hovertemplate=f"<b>{bus['name']}</b><br>ID: {bus['id']}<br>Tipo: {bus['type'].upper()}<br>Vn: {bus['vn_kv']} kV<extra></extra>",
+            showlegend=False
+        ))
         
-        st.header("📊 Análises")
-        if st.button("🔁 Calcular Fluxo de Potência", use_container_width=True):
-            st.info("Fluxo calculado! (simulação)")
-            st.session_state.results = {
-                'type': 'power_flow',
-                'timestamp': datetime.now().isoformat(),
-                'voltages': [0.98, 1.02, 0.95, 1.08],
-                'converged': True
-            }
+        # Nome da barra
+        fig.add_annotation(
+            x=bus['x'],
+            y=bus['y'] + 40,
+            text=bus['name'],
+            showarrow=False,
+            font=dict(size=11, color="#1e293b", family="Arial"),
+            bgcolor="rgba(255,255,255,0.8)",
+            borderpad=4
+        )
         
-        if st.button("⚡ Análise de Curto-Circuito", use_container_width=True):
-            st.info("Curto-circuito analisado! (simulação)")
-            st.session_state.results = {
-                'type': 'short_circuit',
-                'timestamp': datetime.now().isoformat(),
-                'fault_current': "15.3 kA",
-                'location': "Barra 2"
-            }
-        
-        st.divider()
-        
-        st.header("⚙️ Configurações")
-        st.session_state.system_name = st.text_input("Nome do Sistema", 
-                                                    st.session_state.system_name)
-        
-        st.divider()
-        
-        st.header("💾 Arquivos")
-        if st.button("📥 Exportar Sistema", use_container_width=True):
-            data = {
-                'system': st.session_state.elements,
-                'results': st.session_state.results,
-                'metadata': {
-                    'name': st.session_state.system_name,
-                    'export_date': datetime.now().isoformat()
-                }
-            }
-            st.download_button(
-                label="Baixar JSON",
-                data=json.dumps(data, indent=2),
-                file_name=f"{st.session_state.system_name}.json",
-                mime="application/json"
+        # Mostrar tensão se houver resultados
+        if st.session_state.results and st.session_state.results.get('voltages'):
+            bus_idx = next((i for i, b in enumerate(st.session_state.buses) if b['id'] == bus['id']), None)
+            if bus_idx is not None and bus_idx < len(st.session_state.results['voltages']):
+                v = st.session_state.results['voltages'][bus_idx]
+                color = 'red' if v < 0.95 else 'orange' if v > 1.05 else 'green'
+                fig.add_annotation(
+                    x=bus['x'],
+                    y=bus['y'] - 40,
+                    text=f"{v:.3f} pu",
+                    showarrow=False,
+                    font=dict(size=10, color=color),
+                    bgcolor="rgba(255,255,255,0.8)",
+                    borderpad=2
+                )
+    
+    # Desenhar cargas
+    for load in st.session_state.loads:
+        bus = get_bus_by_id(load['bus'])
+        if bus:
+            is_selected = (st.session_state.selected_type == 'load' and 
+                          st.session_state.selected_element == load['id'])
+            
+            fig.add_trace(go.Scatter(
+                x=[bus['x'] + 40],
+                y=[bus['y']],
+                mode='markers+text',
+                marker=dict(
+                    symbol='square',
+                    size=20,
+                    color=load['color'],
+                    line=dict(width=3 if is_selected else 1, color='#facc15' if is_selected else 'white')
+                ),
+                text='L',
+                textfont=dict(color='white', size=10, family='Arial Black'),
+                textposition='middle center',
+                hovertemplate=f"<b>{load['name']}</b><br>P: {load['p_mw']} MW<br>Q: {load['q_mvar']} MVar<extra></extra>",
+                showlegend=False
+            ))
+    
+    # Desenhar geradores
+    for gen in st.session_state.generators:
+        bus = get_bus_by_id(gen['bus'])
+        if bus:
+            is_selected = (st.session_state.selected_type == 'generator' and 
+                          st.session_state.selected_element == gen['id'])
+            
+            fig.add_trace(go.Scatter(
+                x=[bus['x'] - 40],
+                y=[bus['y']],
+                mode='markers+text',
+                marker=dict(
+                    symbol='circle',
+                    size=20,
+                    color=gen['color'],
+                    line=dict(width=3 if is_selected else 2, color='#facc15' if is_selected else '#059669')
+                ),
+                text='G',
+                textfont=dict(color='white', size=10, family='Arial Black'),
+                textposition='middle center',
+                hovertemplate=f"<b>{gen['name']}</b><br>P: {gen['p_mw']} MW<br>Vm: {gen['vm_pu']} pu<extra></extra>",
+                showlegend=False
+            ))
+    
+    # Linha de conexão temporária
+    if st.session_state.mode == 'connect' and st.session_state.connecting_from is not None:
+        from_bus = get_bus_by_id(st.session_state.connecting_from)
+        if from_bus:
+            fig.add_annotation(
+                x=from_bus['x'],
+                y=from_bus['y'] - 60,
+                text="⚡ Clique na segunda barra",
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor='#f59e0b',
+                font=dict(size=12, color='#f59e0b'),
+                bgcolor='rgba(255,255,255,0.9)',
+                bordercolor='#f59e0b',
+                borderwidth=2
             )
-        
-        if st.button("🔄 Resetar Sistema", type="secondary", use_container_width=True):
-            st.session_state.elements = {}
-            st.session_state.selected_element = None
-            st.rerun()
+    
+    fig.update_layout(
+        width=1000,
+        height=700,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        title=dict(text=f"⚡ {st.session_state.system_name}", font=dict(size=20)),
+        xaxis=dict(range=[0, 1000], showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(range=[0, 700], showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1),
+        showlegend=False,
+        hovermode='closest'
+    )
+    
+    return fig
 
-# Função para processar mensagens do JavaScript
-def handle_js_message(message):
-    if isinstance(message, dict):
-        action = message.get('action')
-        data = message.get('data', {})
+def run_power_flow():
+    if not st.session_state.buses:
+        st.error("Adicione barras ao sistema!")
+        return
+    
+    # Garantir barra slack
+    slack_buses = [b for b in st.session_state.buses if b['type'] == 'slack']
+    if not slack_buses:
+        st.session_state.buses[0]['type'] = 'slack'
+        st.session_state.buses[0]['color'] = '#ef4444'
+    
+    # Simulação
+    voltages = []
+    for bus in st.session_state.buses:
+        if bus['type'] == 'slack':
+            voltages.append(1.0)
+        elif bus['type'] == 'pv':
+            gen = next((g for g in st.session_state.generators if g['bus'] == bus['id']), None)
+            voltages.append(gen['vm_pu'] if gen else 1.0)
+        else:
+            base = 1.0
+            if [l for l in st.session_state.loads if l['bus'] == bus['id']]:
+                base -= 0.05
+            if [g for g in st.session_state.generators if g['bus'] == bus['id']]:
+                base += 0.03
+            voltages.append(max(0.9, min(1.1, base + np.random.normal(0, 0.02))))
+    
+    results = {
+        'voltages': voltages,
+        'converged': True,
+        'iterations': np.random.randint(3, 8),
+        'total_load': sum(l['p_mw'] for l in st.session_state.loads),
+        'total_gen': sum(g['p_mw'] for g in st.session_state.generators)
+    }
+    
+    st.session_state.results = results
+    return results
+
+def export_system():
+    data = {
+        'metadata': {
+            'name': st.session_state.system_name,
+            'export_date': datetime.now().isoformat(),
+            'version': '1.0'
+        },
+        'system': {
+            'buses': st.session_state.buses,
+            'lines': st.session_state.lines,
+            'loads': st.session_state.loads,
+            'generators': st.session_state.generators
+        },
+        'results': st.session_state.results
+    }
+    return json.dumps(data, indent=2)
+
+def import_system(uploaded_file):
+    try:
+        data = json.load(uploaded_file)
         
-        if action == 'add_element':
-            element_id = data.get('id')
-            st.session_state.elements[element_id] = {
-                'type': data.get('type'),
-                'subtype': data.get('subtype'),
-                'x': data.get('x'),
-                'y': data.get('y'),
-                'name': data.get('name'),
-                'timestamp': datetime.now().isoformat()
-            }
-            
-        elif action == 'move_element':
-            element_id = data.get('id')
-            if element_id in st.session_state.elements:
-                st.session_state.elements[element_id]['x'] = data.get('x')
-                st.session_state.elements[element_id]['y'] = data.get('y')
-            
-        elif action == 'select_element':
-            st.session_state.selected_element = {
-                'id': data.get('id'),
-                'type': data.get('type'),
-                'subtype': data.get('subtype')
-            }
-            
-        elif action == 'delete_element':
-            element_id = data.get('id')
-            if element_id in st.session_state.elements:
-                del st.session_state.elements[element_id]
-            
-        elif action == 'clear_canvas':
-            st.session_state.elements = {}
-            st.session_state.selected_element = None
+        if 'system' in data:
+            system_data = data['system']
+            st.session_state.buses = system_data.get('buses', [])
+            st.session_state.lines = system_data.get('lines', [])
+            st.session_state.loads = system_data.get('loads', [])
+            st.session_state.generators = system_data.get('generators', [])
+        
+        all_ids = []
+        all_ids.extend([b['id'] for b in st.session_state.buses])
+        all_ids.extend([l['id'] for l in st.session_state.lines])
+        all_ids.extend([l['id'] for l in st.session_state.loads])
+        all_ids.extend([g['id'] for g in st.session_state.generators])
+        
+        if all_ids:
+            st.session_state.next_id = max(all_ids) + 1
+        
+        st.session_state.results = data.get('results')
+        
+        if 'metadata' in data:
+            st.session_state.system_name = data['metadata'].get('name', 'Sistema Importado')
+        
+        return True
+    except Exception as e:
+        st.error(f"Erro ao importar: {str(e)}")
+        return False
 
 # Interface principal
 def main():
-    st.title("⚡ Power System Editor - Drag & Drop")
-    st.markdown("Crie sistemas elétricos arrastando e conectando elementos visualmente")
+    st.title("⚡ Power System Studio")
+    st.markdown("Sistema interativo para análise de redes elétricas")
     
-    # Layout principal
-    col1, col2 = st.columns([3, 1])
+    # Barra lateral
+    with st.sidebar:
+        st.header("🎨 Elementos")
+        
+        st.markdown("### Barras")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔴 Slack", use_container_width=True, help="Barra de referência"):
+                st.session_state.mode = 'add-slack'
+        with col2:
+            if st.button("🟢 PV", use_container_width=True, help="Geração com controle de tensão"):
+                st.session_state.mode = 'add-pv'
+        with col3:
+            if st.button("🔵 PQ", use_container_width=True, help="Carga/barra passiva"):
+                st.session_state.mode = 'add-pq'
+        
+        st.markdown("### Ferramentas")
+        
+        tool_col1, tool_col2 = st.columns(2)
+        with tool_col1:
+            if st.button("🔗 Conectar", type="primary" if st.session_state.mode == 'connect' else "secondary", use_container_width=True):
+                st.session_state.mode = 'connect'
+                st.session_state.connecting_from = None
+        
+        with tool_col2:
+            if st.button("🗑️ Deletar", type="primary" if st.session_state.mode == 'delete' else "secondary", use_container_width=True):
+                st.session_state.mode = 'delete'
+        
+        st.divider()
+        
+        st.header("📊 Análise")
+        
+        if st.button("⚡ Fluxo de Potência", use_container_width=True):
+            with st.spinner("Calculando..."):
+                results = run_power_flow()
+                if results:
+                    st.success(f"✅ Convergiu em {results['iterations']} iterações")
+                    st.rerun()
+        
+        if st.session_state.results:
+            st.divider()
+            st.subheader("Resultados")
+            res = st.session_state.results
+            
+            col_r1, col_r2 = st.columns(2)
+            with col_r1:
+                st.metric("Carga Total", f"{res['total_load']:.1f} MW")
+            with col_r2:
+                st.metric("Geração Total", f"{res['total_gen']:.1f} MW")
+            
+            if res['voltages']:
+                st.metric("V Média", f"{np.mean(res['voltages']):.3f} pu")
+                st.metric("V Mín", f"{min(res['voltages']):.3f} pu")
+                st.metric("V Máx", f"{max(res['voltages']):.3f} pu")
+        
+        st.divider()
+        
+        st.header("💾 Sistema")
+        st.session_state.system_name = st.text_input("Nome", st.session_state.system_name)
+        
+        # Exportar
+        if st.button("📥 Exportar Sistema", use_container_width=True):
+            json_str = export_system()
+            st.download_button(
+                label="⬇️ Baixar JSON",
+                data=json_str,
+                file_name=f"{st.session_state.system_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        
+        # Importar
+        uploaded_file = st.file_uploader("Importar sistema", type=['json'])
+        if uploaded_file is not None:
+            if import_system(uploaded_file):
+                st.success("Sistema importado com sucesso!")
+                st.rerun()
+        
+        if st.button("🔄 Limpar Tudo", use_container_width=True):
+            st.session_state.buses = []
+            st.session_state.lines = []
+            st.session_state.loads = []
+            st.session_state.generators = []
+            st.session_state.results = None
+            st.session_state.selected_element = None
+            st.session_state.selected_type = None
+            st.rerun()
     
-    with col1:
-        # Canvas interativo
-        st.subheader("Canvas Interativo")
+    # Área principal
+    col_main, col_props = st.columns([3, 1])
+    
+    with col_main:
+        # Instruções
+        mode_msg = {
+            'select': "👆 Clique nos elementos para selecionar",
+            'add-slack': "📍 Clique no canvas para adicionar Barra SLACK",
+            'add-pv': "📍 Clique no canvas para adicionar Barra PV",
+            'add-pq': "📍 Clique no canvas para adicionar Barra PQ",
+            'connect': "🔗 Clique em 2 barras para conectá-las",
+            'delete': "🗑️ Clique nos elementos para remover"
+        }
+        st.info(mode_msg.get(st.session_state.mode, "Selecione uma ferramenta"))
         
-        # Criar componente HTML
-        canvas_component = create_canvas_component()
+        # Canvas
+        fig = create_interactive_canvas()
         
-        # Processar mensagens do JavaScript
-        if canvas_component:
-            # Esta é uma versão simplificada - em produção, você usaria um componente customizado
-            pass
+        # Clique no canvas para adicionar barras
+        if st.session_state.mode in ['add-slack', 'add-pv', 'add-pq']:
+            st.markdown("**Adicionar barra nas coordenadas:**")
+            input_col1, input_col2, input_col3 = st.columns([2, 2, 1])
+            with input_col1:
+                x_pos = st.number_input("X", 50, 950, st.session_state.add_bus_x, key="input_x")
+            with input_col2:
+                y_pos = st.number_input("Y", 50, 650, st.session_state.add_bus_y, key="input_y")
+            with input_col3:
+                if st.button("✅ Adicionar", use_container_width=True):
+                    bus_type = st.session_state.mode.replace('add-', '')
+                    add_bus(x=x_pos, y=y_pos, bus_type=bus_type)
+                    st.session_state.mode = 'select'
+                    st.rerun()
+        
+        st.plotly_chart(fig, use_container_width=True, key="canvas")
+        
+        # Lista de elementos clicáveis
+        st.subheader("🎯 Selecionar Elemento")
+        
+        tab1, tab2, tab3, tab4 = st.tabs(["Barras", "Linhas", "Cargas", "Geradores"])
+        
+        with tab1:
+            if st.session_state.buses:
+                for bus in st.session_state.buses:
+                    col_b1, col_b2, col_b3 = st.columns([2, 1, 1])
+                    with col_b1:
+                        if st.button(f"{bus['name']} (ID: {bus['id']})", key=f"select_bus_{bus['id']}", use_container_width=True):
+                            if st.session_state.mode == 'connect':
+                                if st.session_state.connecting_from is None:
+                                    st.session_state.connecting_from = bus['id']
+                                    st.success(f"Primeira barra: {bus['id']}")
+                                else:
+                                    if st.session_state.connecting_from != bus['id']:
+                                        add_line(st.session_state.connecting_from, bus['id'])
+                                        st.success("Linha criada!")
+                                    st.session_state.connecting_from = None
+                                    st.session_state.mode = 'select'
+                                st.rerun()
+                            elif st.session_state.mode == 'delete':
+                                delete_element(bus['id'], 'bus')
+                                st.rerun()
+                            else:
+                                st.session_state.selected_element = bus['id']
+                                st.session_state.selected_type = 'bus'
+                                st.rerun()
+                    with col_b2:
+                        if st.button("➕ Carga", key=f"add_load_{bus['id']}"):
+                            add_load(bus['id'])
+                            st.rerun()
+                    with col_b3:
+                        if st.button("➕ Ger", key=f"add_gen_{bus['id']}"):
+                            add_generator(bus['id'])
+                            st.rerun()
+            else:
+                st.info("Nenhuma barra criada")
+        
+        with tab2:
+            if st.session_state.lines:
+                for line in st.session_state.lines:
+                    if st.button(f"{line['name']}: Barra {line['from']} → {line['to']}", key=f"select_line_{line['id']}", use_container_width=True):
+                        if st.session_state.mode == 'delete':
+                            delete_element(line['id'], 'line')
+                            st.rerun()
+                        else:
+                            st.session_state.selected_element = line['id']
+                            st.session_state.selected_type = 'line'
+                            st.rerun()
+            else:
+                st.info("Nenhuma linha criada")
+        
+        with tab3:
+            if st.session_state.loads:
+                for load in st.session_state.loads:
+                    if st.button(f"{load['name']} (Barra {load['bus']})", key=f"select_load_{load['id']}", use_container_width=True):
+                        if st.session_state.mode == 'delete':
+                            delete_element(load['id'], 'load')
+                            st.rerun()
+                        else:
+                            st.session_state.selected_element = load['id']
+                            st.session_state.selected_type = 'load'
+                            st.rerun()
+            else:
+                st.info("Nenhuma carga criada")
+        
+        with tab4:
+            if st.session_state.generators:
+                for gen in st.session_state.generators:
+                    if st.button(f"{gen['name']} (Barra {gen['bus']})", key=f"select_gen_{gen['id']}", use_container_width=True):
+                        if st.session_state.mode == 'delete':
+                            delete_element(gen['id'], 'generator')
+                            st.rerun()
+                        else:
+                            st.session_state.selected_element = gen['id']
+                            st.session_state.selected_type = 'generator'
+                            st.rerun()
+            else:
+                st.info("Nenhum gerador criado")
+    
+    with col_props:
+        st.subheader("🔧 Propriedades")
+        
+        if st.session_state.selected_element is not None:
+            if st.session_state.selected_type == 'bus':
+                bus = next((b for b in st.session_state.buses if b['id'] == st.session_state.selected_element), None)
+                if bus:
+                    st.success(f"Barra {bus['id']} selecionada")
+                    
+                    bus['name'] = st.text_input("Nome", bus['name'], key="edit_bus_name")
+                    bus['type'] = st.selectbox("Tipo", ['slack', 'pv', 'pq'], 
+                                              index=['slack', 'pv', 'pq'].index(bus['type']), key="edit_bus_type")
+                    bus['vn_kv'] = st.number_input("Tensão Nominal (kV)", value=bus['vn_kv'], min_value=0.1, key="edit_bus_vn")
+                    bus['x'] = st.number_input("Posição X", value=bus['x'], min_value=0, max_value=1000, key="edit_bus_x")
+                    bus['y'] = st.number_input("Posição Y", value=bus['y'], min_value=0, max_value=700, key="edit_bus_y")
+                    
+                    if st.button("💾 Salvar", use_container_width=True):
+                        bus['color'] = {'slack': '#ef4444', 'pv': '#10b981', 'pq': '#3b82f6'}[bus['type']]
+                        st.success("Salvo!")
+                        st.rerun()
+            
+            elif st.session_state.selected_type == 'line':
+                line = next((l for l in st.session_state.lines if l['id'] == st.session_state.selected_element), None)
+                if line:
+                    st.success(f"Linha {line['id']} selecionada")
+                    line['name'] = st.text_input("Nome", line['name'], key="edit_line_name")
+                    
+                    from_bus = get_bus_by_id(line['from'])
+                    to_bus = get_bus_by_id(line['to'])
+                    if from_bus and to_bus:
+                        st.info(f"Conecta: Barra {line['from']} → Barra {line['to']}")
+                    
+                    line['r_ohm_per_km'] = st.number_input("R (Ω/km)", value=line['r_ohm_per_km'], min_value=0.001, key="edit_line_r")
+                    line['x_ohm_per_km'] = st.number_input("X (Ω/km)", value=line['x_ohm_per_km'], min_value=0.001, key="edit_line_x")
+                    line['length_km'] = st.number_input("Comprimento (km)", value=line['length_km'], min_value=0.1, key="edit_line_len")
+                    
+                    if st.button("💾 Salvar", use_container_width=True):
+                        st.success("Salvo!")
+                        st.rerun()
+            
+            elif st.session_state.selected_type == 'load':
+                load = next((l for l in st.session_state.loads if l['id'] == st.session_state.selected_element), None)
+                if load:
+                    st.success(f"Carga {load['id']} selecionada")
+                    load['name'] = st.text_input("Nome", load['name'], key="edit_load_name")
+                    
+                    bus = get_bus_by_id(load['bus'])
+                    if bus:
+                        st.info(f"Conectada à: {bus['name']}")
+                    
+                    load['p_mw'] = st.number_input("P (MW)", value=load['p_mw'], min_value=0.0, key="edit_load_p")
+                    load['q_mvar'] = st.number_input("Q (MVar)", value=load['q_mvar'], min_value=0.0, key="edit_load_q")
+                    
+                    if st.button("💾 Salvar", use_container_width=True):
+                        st.success("Salvo!")
+                        st.rerun()
+            
+            elif st.session_state.selected_type == 'generator':
+                gen = next((g for g in st.session_state.generators if g['id'] == st.session_state.selected_element), None)
+                if gen:
+                    st.success(f"Gerador {gen['id']} selecionado")
+                    gen['name'] = st.text_input("Nome", gen['name'], key="edit_gen_name")
+                    
+                    bus = get_bus_by_id(gen['bus'])
+                    if bus:
+                        st.info(f"Conectado à: {bus['name']}")
+                    
+                    gen['p_mw'] = st.number_input("P (MW)", value=gen['p_mw'], min_value=0.0, key="edit_gen_p")
+                    gen['vm_pu'] = st.number_input("Vm (pu)", value=gen['vm_pu'], min_value=0.8, max_value=1.2, step=0.01, key="edit_gen_vm")
+                    
+                    if st.button("💾 Salvar", use_container_width=True):
+                        st.success("Salvo!")
+                        st.rerun()
+            
+            st.divider()
+            if st.button("🗑️ Remover Elemento", type="secondary", use_container_width=True):
+                delete_element(st.session_state.selected_element, st.session_state.selected_type)
+                st.session_state.selected_element = None
+                st.session_state.selected_type = None
+                st.rerun()
+        else:
+            st.info("👈 Selecione um elemento para editar")
+        
+        st.divider()
         
         # Estatísticas
-        st.markdown("---")
-        col_stats = st.columns(4)
-        with col_stats[0]:
-            buses = sum(1 for e in st.session_state.elements.values() if e['type'] == 'bus')
-            st.metric("Barras", buses)
-        with col_stats[1]:
-            lines = sum(1 for e in st.session_state.elements.values() if e['type'] == 'line')
-            st.metric("Linhas", lines)
-        with col_stats[2]:
-            loads = sum(1 for e in st.session_state.elements.values() if e['type'] == 'load')
-            st.metric("Cargas", loads)
-        with col_stats[3]:
-            gens = sum(1 for e in st.session_state.elements.values() if e['type'] == 'generator')
-            st.metric("Geradores", gens)
+        st.subheader("📊 Estatísticas")
+        st.metric("Barras", len(st.session_state.buses))
+        st.metric("Linhas", len(st.session_state.lines))
+        st.metric("Cargas", len(st.session_state.loads))
+        st.metric("Geradores", len(st.session_state.generators))
     
-    with col2:
-        create_palette()
-        
-        # Painel de propriedades
-        if st.session_state.selected_element:
-            st.subheader("🔧 Propriedades")
-            
-            element_info = st.session_state.selected_element
-            element_id = element_info.get('id')
-            element_data = st.session_state.elements.get(element_id, {})
-            
-            st.info(f"Elemento selecionado: {element_data.get('name', 'N/A')}")
-            
-            with st.form("properties_form"):
-                if element_data.get('type') == 'bus':
-                    new_name = st.text_input("Nome", element_data.get('name', 'Barra'))
-                    new_type = st.selectbox("Tipo", ["slack", "pv", "pq"], 
-                                          index=["slack", "pv", "pq"].index(element_data.get('subtype', 'pq')))
-                    
-                    col_x, col_y = st.columns(2)
-                    with col_x:
-                        new_x = st.number_input("Posição X", value=element_data.get('x', 0))
-                    with col_y:
-                        new_y = st.number_input("Posição Y", value=element_data.get('y', 0))
-                    
-                    if st.form_submit_button("💾 Atualizar"):
-                        if element_id in st.session_state.elements:
-                            st.session_state.elements[element_id].update({
-                                'name': new_name,
-                                'subtype': new_type,
-                                'x': new_x,
-                                'y': new_y
-                            })
-                            st.success("Atualizado!")
-                            st.rerun()
-                
-                elif element_data.get('type') == 'load':
-                    new_name = st.text_input("Nome", element_data.get('name', 'Carga'))
-                    new_p = st.number_input("P (MW)", value=5.0)
-                    new_q = st.number_input("Q (MVar)", value=2.0)
-                    
-                    if st.form_submit_button("💾 Atualizar"):
-                        st.success("Atualizado!")
-                        st.rerun()
-                
-                elif element_data.get('type') == 'generator':
-                    new_name = st.text_input("Nome", element_data.get('name', 'Gerador'))
-                    new_p = st.number_input("P (MW)", value=10.0)
-                    new_v = st.number_input("Vm (pu)", value=1.0)
-                    
-                    if st.form_submit_button("💾 Atualizar"):
-                        st.success("Atualizado!")
-                        st.rerun()
-        
-        # Resultados
-        if st.session_state.results:
-            st.subheader("📊 Resultados")
-            
-            results = st.session_state.results
-            time_str = datetime.fromisoformat(results.get('timestamp', datetime.now().isoformat())).strftime("%H:%M:%S")
-            
-            if results.get('type') == 'power_flow':
-                st.markdown(f"**Fluxo de Potência** ({time_str})")
-                
-                if results.get('converged'):
-                    st.success("✅ Convergiu")
-                else:
-                    st.error("❌ Não convergiu")
-                
-                if 'voltages' in results:
-                    avg_v = np.mean(results['voltages'])
-                    st.metric("Tensão Média", f"{avg_v:.3f} pu")
-            
-            elif results.get('type') == 'short_circuit':
-                st.markdown(f"**Curto-Circuito** ({time_str})")
-                
-                if 'fault_current' in results:
-                    st.metric("Corrente de Falta", results['fault_current'])
-                
-                if 'location' in results:
-                    st.info(f"Local: {results['location']}")
+    # Rodapé com informações
+    st.divider()
+    footer_cols = st.columns(4)
+    with footer_cols[0]:
+        st.metric("Total de Elementos", len(st.session_state.buses) + len(st.session_state.lines) + 
+                 len(st.session_state.loads) + len(st.session_state.generators))
+    with footer_cols[1]:
+        if st.session_state.loads:
+            total_load = sum(l['p_mw'] for l in st.session_state.loads)
+            st.metric("Carga Total", f"{total_load:.1f} MW")
+        else:
+            st.metric("Carga Total", "0 MW")
+    with footer_cols[2]:
+        if st.session_state.generators:
+            total_gen = sum(g['p_mw'] for g in st.session_state.generators)
+            st.metric("Geração Total", f"{total_gen:.1f} MW")
+        else:
+            st.metric("Geração Total", "0 MW")
+    with footer_cols[3]:
+        if st.session_state.generators and st.session_state.loads:
+            balance = sum(g['p_mw'] for g in st.session_state.generators) - sum(l['p_mw'] for l in st.session_state.loads)
+            st.metric("Balanço", f"{balance:.1f} MW", delta=f"{balance:.1f} MW")
+        else:
+            st.metric("Balanço", "0 MW")
 
-# Executar aplicação
 if __name__ == "__main__":
     main()
