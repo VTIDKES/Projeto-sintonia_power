@@ -1,10 +1,9 @@
 # STREAMLIT + PANDAPOWER - Análise Completa
 # Sistemas Elétricos de Potência
+# STREAMLIT - Power System Studio
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import json
 from datetime import datetime
 
@@ -98,336 +97,6 @@ def add_generator(bus_id):
         st.session_state.generators.append(new_gen)
         return new_gen
     return None
-
-def handle_bus_click(bus_id):
-    """Processa clique em uma barra"""
-    if st.session_state.mode == 'select':
-        st.session_state.selected_bus = bus_id
-        st.rerun()
-    elif st.session_state.mode == 'connect':
-        if st.session_state.temp_connection is None:
-            st.session_state.temp_connection = bus_id
-            st.rerun()
-        else:
-            from_bus = st.session_state.temp_connection
-            to_bus = bus_id
-            if from_bus != to_bus:
-                result = add_line(from_bus, to_bus)
-                if result:
-                    st.success(f"✅ Linha criada entre barra {from_bus} e barra {to_bus}")
-                else:
-                    st.warning("⚠️ Conexão já existe ou inválida")
-            else:
-                st.warning("⚠️ Não é possível conectar uma barra a si mesma")
-            st.session_state.temp_connection = None
-            st.rerun()
-    elif st.session_state.mode == 'add_load':
-        result = add_load(bus_id)
-        if result:
-            st.success(f"✅ Carga adicionada à barra {bus_id}")
-            st.rerun()
-        else:
-            st.warning("⚠️ Esta barra já tem uma carga")
-    elif st.session_state.mode == 'add_gen':
-        result = add_generator(bus_id)
-        if result:
-            st.success(f"✅ Gerador adicionado à barra {bus_id}")
-            st.rerun()
-        else:
-            st.warning("⚠️ Esta barra já tem um gerador")
-
-def draw_power_system():
-    """Desenha o sistema elétrico usando Plotly com portas de conexão interativas"""
-    fig = go.Figure()
-    
-    # Configurar o layout base com grid
-    fig.update_xaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(200, 200, 200, 0.5)',
-        zeroline=False,
-        range=[-50, 1050],
-        showticklabels=False
-    )
-    fig.update_yaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(200, 200, 200, 0.5)',
-        zeroline=False,
-        range=[-50, 650],
-        scaleanchor="x",
-        scaleratio=1,
-        showticklabels=False
-    )
-    
-    # Cores sólidas (sem gradientes)
-    colors = {
-        'slack': '#667eea',
-        'pv': '#4CAF50',
-        'pq': '#FF9800',
-        'line': '#667eea',
-        'load': '#9C27B0',
-        'generator': '#4CAF50',
-        'port': '#4CAF50',
-        'selected': '#FFD700'
-    }
-    
-    # 1. Desenhar linhas de transmissão
-    for line in st.session_state.lines:
-        from_bus = next((b for b in st.session_state.buses if b['id'] == line['from']), None)
-        to_bus = next((b for b in st.session_state.buses if b['id'] == line['to']), None)
-        
-        if from_bus and to_bus:
-            # Linha principal
-            fig.add_trace(go.Scatter(
-                x=[from_bus['x'], to_bus['x']],
-                y=[from_bus['y'], to_bus['y']],
-                mode='lines',
-                line=dict(
-                    color=colors['line'],
-                    width=3
-                ),
-                hoverinfo='text',
-                hovertext=f"<b>Linha {line['id']}</b><br>" +
-                         f"De: Barra {line['from']}<br>" +
-                         f"Para: Barra {line['to']}<br>" +
-                         f"Impedância: {line['r_ohm_per_km']:.3f}+j{line['x_ohm_per_km']:.3f} Ω/km<br>" +
-                         f"Comprimento: {line['length_km']:.1f} km",
-                showlegend=False
-            ))
-            
-            # Adicionar indicador de fluxo (seta)
-            mid_x = (from_bus['x'] + to_bus['x']) / 2
-            mid_y = (from_bus['y'] + to_bus['y']) / 2
-            
-            fig.add_annotation(
-                x=mid_x,
-                y=mid_y,
-                ax=mid_x,
-                ay=mid_y,
-                xref="x",
-                yref="y",
-                axref="x",
-                ayref="y",
-                showarrow=True,
-                arrowhead=3,
-                arrowsize=1.5,
-                arrowwidth=1.5,
-                arrowcolor=colors['line']
-            )
-    
-    # 2. Desenhar cargas
-    for load in st.session_state.loads:
-        bus = next((b for b in st.session_state.buses if b['id'] == load['bus']), None)
-        if bus:
-            # Posicionar a carga ao lado da barra
-            load_x = bus['x'] + 50
-            load_y = bus['y'] + 30
-            
-            # Bloco de carga (retângulo)
-            fig.add_shape(
-                type="rect",
-                x0=load_x - 40,
-                y0=load_y - 25,
-                x1=load_x + 40,
-                y1=load_y + 25,
-                fillcolor='rgba(156, 39, 176, 0.1)',
-                line_color=colors['load'],
-                line_width=2
-            )
-            
-            # Texto da carga
-            fig.add_annotation(
-                x=load_x,
-                y=load_y,
-                text=f"<b>Carga {load['id']}</b><br>P: {load['p_mw']} MW<br>Q: {load['q_mvar']} MVar",
-                showarrow=False,
-                font=dict(size=9, color=colors['load']),
-                bgcolor='rgba(255, 255, 255, 0.9)',
-                borderpad=4
-            )
-            
-            # Linha de conexão
-            fig.add_trace(go.Scatter(
-                x=[bus['x'] + 25, load_x - 40],
-                y=[bus['y'], load_y],
-                mode='lines',
-                line=dict(color=colors['load'], width=2, dash='dash'),
-                hoverinfo='skip',
-                showlegend=False
-            ))
-    
-    # 3. Desenhar geradores
-    for gen in st.session_state.generators:
-        bus = next((b for b in st.session_state.buses if b['id'] == gen['bus']), None)
-        if bus:
-            # Posicionar o gerador ao lado da barra
-            gen_x = bus['x'] - 50
-            gen_y = bus['y'] - 30
-            
-            # Bloco do gerador (círculo)
-            fig.add_shape(
-                type="circle",
-                x0=gen_x - 30,
-                y0=gen_y - 30,
-                x1=gen_x + 30,
-                y1=gen_y + 30,
-                fillcolor='rgba(76, 175, 80, 0.1)',
-                line_color=colors['generator'],
-                line_width=2
-            )
-            
-            # Texto do gerador
-            fig.add_annotation(
-                x=gen_x,
-                y=gen_y,
-                text=f"<b>Gerador</b><br>P: {gen['p_mw']} MW<br>Vm: {gen['vm_pu']} pu",
-                showarrow=False,
-                font=dict(size=9, color=colors['generator']),
-                bgcolor='rgba(255, 255, 255, 0.9)',
-                borderpad=4
-            )
-            
-            # Linha de conexão
-            fig.add_trace(go.Scatter(
-                x=[bus['x'] - 25, gen_x + 30],
-                y=[bus['y'], gen_y],
-                mode='lines',
-                line=dict(color=colors['generator'], width=2, dash='dash'),
-                hoverinfo='skip',
-                showlegend=False
-            ))
-    
-    # 4. Desenhar barras (buses)
-    for bus in st.session_state.buses:
-        is_selected = st.session_state.selected_bus == bus['id']
-        
-        # Tipo de barra determina cor e estilo
-        if bus['type'] == 'slack':
-            bus_color = colors['slack']
-            bus_symbol = 'diamond'
-            bus_label = "SLACK"
-        elif bus['type'] == 'pv':
-            bus_color = colors['pv']
-            bus_symbol = 'square'
-            bus_label = "PV"
-        else:  # pq
-            bus_color = colors['pq']
-            bus_symbol = 'circle'
-            bus_label = "PQ"
-        
-        # Bloco principal da barra
-        fig.add_trace(go.Scatter(
-            x=[bus['x']],
-            y=[bus['y']],
-            mode='markers+text',
-            marker=dict(
-                size=35 if is_selected else 30,
-                color=bus_color,
-                symbol=bus_symbol,
-                line=dict(width=4 if is_selected else 2, 
-                         color=colors['selected'] if is_selected else 'white')
-            ),
-            text=bus_label,
-            textposition="middle center",
-            textfont=dict(size=10, color='white', family='Arial'),
-            hoverinfo='text',
-            hovertext=f"<b>Barra {bus['id']}: {bus['name']}</b><br>" +
-                     f"Tipo: {bus['type'].upper()}<br>" +
-                     f"Vn: {bus['vn_kv']:.2f} kV",
-            showlegend=False
-        ))
-        
-        # Portas de conexão (pontos verdes)
-        # Porta superior
-        fig.add_trace(go.Scatter(
-            x=[bus['x']],
-            y=[bus['y'] + 25],
-            mode='markers',
-            marker=dict(size=12, color=colors['port'], symbol='circle',
-                       line=dict(width=2, color='white')),
-            hoverinfo='skip',
-            showlegend=False
-        ))
-        
-        # Porta inferior
-        fig.add_trace(go.Scatter(
-            x=[bus['x']],
-            y=[bus['y'] - 25],
-            mode='markers',
-            marker=dict(size=12, color=colors['port'], symbol='circle',
-                       line=dict(width=2, color='white')),
-            hoverinfo='skip',
-            showlegend=False
-        ))
-        
-        # Nome da barra
-        fig.add_annotation(
-            x=bus['x'],
-            y=bus['y'] - 40,
-            text=f"<b>{bus['name']}</b>",
-            showarrow=False,
-            font=dict(size=10, color='black'),
-            bgcolor='rgba(255, 255, 255, 0.8)',
-            borderpad=3
-        )
-        
-        # Se houver resultados, mostrar tensão
-        if st.session_state.results and st.session_state.results['type'] == 'power_flow':
-            if bus['id'] < len(st.session_state.results['data']['voltages']):
-                voltage = st.session_state.results['data']['voltages'][bus['id']]
-                if 0.95 <= voltage <= 1.05:
-                    voltage_color = colors['pv']
-                elif 0.9 <= voltage < 0.95 or 1.05 < voltage <= 1.1:
-                    voltage_color = '#FF9800'
-                else:
-                    voltage_color = '#F44336'
-                
-                fig.add_annotation(
-                    x=bus['x'],
-                    y=bus['y'] + 40,
-                    text=f"V = {voltage:.3f} pu",
-                    showarrow=False,
-                    font=dict(size=10, color=voltage_color),
-                    bgcolor='rgba(255, 255, 255, 0.9)',
-                    bordercolor=voltage_color,
-                    borderwidth=1,
-                    borderpad=3
-                )
-    
-    # 5. Conexão temporária (se estiver no modo de conexão)
-    if st.session_state.mode == 'connect' and st.session_state.temp_connection is not None:
-        bus = next((b for b in st.session_state.buses if b['id'] == st.session_state.temp_connection), None)
-        if bus:
-            # Destacar a barra selecionada
-            fig.add_trace(go.Scatter(
-                x=[bus['x']],
-                y=[bus['y']],
-                mode='markers',
-                marker=dict(
-                    size=45,
-                    color='rgba(255, 193, 7, 0.3)',
-                    symbol='circle',
-                    line=dict(width=3, color='#FFC107')
-                ),
-                showlegend=False
-            ))
-    
-    # Configuração final do layout
-    fig.update_layout(
-        width=1000,
-        height=650,
-        plot_bgcolor='rgb(248, 249, 250)',
-        paper_bgcolor='white',
-        title=dict(text="⚡ Diagrama Unifilar Interativo", x=0.5, xanchor='center'),
-        hoverlabel=dict(bgcolor="white", font_size=12),
-        dragmode='pan',
-        hovermode='closest',
-        showlegend=False,
-        margin=dict(l=20, r=20, t=80, b=20)
-    )
-    
-    return fig
 
 def run_power_flow():
     if len(st.session_state.buses) == 0:
@@ -583,6 +252,22 @@ with st.sidebar:
             st.success(f"Barra {new_bus['id']} criada!")
             st.rerun()
     
+    # Conectar barras manualmente
+    if len(st.session_state.buses) >= 2:
+        with st.expander("🔗 Conectar Barras"):
+            bus_options = {f"Barra {b['id']}: {b['name']}": b['id'] for b in st.session_state.buses}
+            
+            from_bus = st.selectbox("De:", list(bus_options.keys()), key='from_bus')
+            to_bus = st.selectbox("Para:", list(bus_options.keys()), key='to_bus')
+            
+            if st.button("🔗 Criar Conexão", use_container_width=True, key='connect_btn'):
+                result = add_line(bus_options[from_bus], bus_options[to_bus])
+                if result:
+                    st.success("Linha criada com sucesso!")
+                    st.rerun()
+                else:
+                    st.warning("Conexão já existe ou é inválida")
+    
     st.markdown("---")
     
     # Ferramentas de análise
@@ -599,6 +284,33 @@ with st.sidebar:
             with st.spinner("Analisando..."):
                 run_short_circuit()
             st.rerun()
+    
+    # Adicionar elementos
+    st.markdown("---")
+    st.subheader("➕ Adicionar Elementos")
+    
+    if len(st.session_state.buses) > 0:
+        load_bus = st.selectbox("Barra para carga:", 
+                               [f"Barra {b['id']}: {b['name']}" for b in st.session_state.buses],
+                               key='load_bus')
+        if st.button("➕ Adicionar Carga", use_container_width=True, key='add_load_btn'):
+            bus_id = int(load_bus.split(':')[0].split(' ')[1])
+            if add_load(bus_id):
+                st.success("Carga adicionada!")
+                st.rerun()
+            else:
+                st.warning("Esta barra já tem uma carga")
+        
+        gen_bus = st.selectbox("Barra para gerador:", 
+                              [f"Barra {b['id']}: {b['name']}" for b in st.session_state.buses],
+                              key='gen_bus')
+        if st.button("⚡ Adicionar Gerador", use_container_width=True, key='add_gen_btn'):
+            bus_id = int(gen_bus.split(':')[0].split(' ')[1])
+            if add_generator(bus_id):
+                st.success("Gerador adicionado!")
+                st.rerun()
+            else:
+                st.warning("Esta barra já tem um gerador")
     
     st.markdown("---")
     
@@ -634,48 +346,63 @@ with st.sidebar:
         st.rerun()
 
 # Layout principal
-col1, col2 = st.columns([2.5, 1])
+col1, col2 = st.columns([2, 1])
 
 with col1:
-    # Diagrama do sistema
-    st.subheader("📐 Diagrama Unifilar")
+    st.subheader("📐 Diagrama do Sistema")
     
     if len(st.session_state.buses) == 0:
         st.info("👈 Comece adicionando barras ao sistema usando o painel lateral")
-    
-    # Criar e exibir o diagrama
-    try:
-        fig = draw_power_system()
-        st.plotly_chart(fig, use_container_width=True, key="main_diagram")
-    except Exception as e:
-        st.error(f"Erro ao criar diagrama: {str(e)}")
-        # Fallback: mostrar informações em texto
-        st.write("**Barras no sistema:**")
+    else:
+        # Exibir sistema em formato de tabela/lista
+        st.write("### 🚏 Barras do Sistema")
         for bus in st.session_state.buses:
-            st.write(f"- Barra {bus['id']}: {bus['name']} (Tipo: {bus['type']})")
-    
-    # Instruções
-    st.markdown("---")
-    st.write("**Instruções:**")
-    if st.session_state.mode == 'select':
-        st.info("🔍 Selecione uma barra para ver detalhes")
-    elif st.session_state.mode == 'add_bus':
-        st.info("➕ Use o painel lateral para adicionar barras")
-    elif st.session_state.mode == 'connect':
-        st.info("🔗 Clique em duas barras para conectá-las (use painel para simular)")
-    elif st.session_state.mode == 'add_load':
-        st.info("📊 Selecione uma barra para adicionar carga (use painel para simular)")
-    elif st.session_state.mode == 'add_gen':
-        st.info("⚡ Selecione uma barra para adicionar gerador (use painel para simular)")
+            col_bus1, col_bus2, col_bus3 = st.columns([1, 2, 1])
+            with col_bus1:
+                if st.button(f"🔍", key=f"select_{bus['id']}"):
+                    st.session_state.selected_bus = bus['id']
+                    st.rerun()
+            with col_bus2:
+                type_color = {
+                    'slack': '🔴',
+                    'pv': '🟢', 
+                    'pq': '🟠'
+                }
+                st.write(f"{type_color.get(bus['type'], '⚫')} **{bus['name']}** (Tipo: {bus['type'].upper()})")
+            with col_bus3:
+                if st.button(f"❌", key=f"del_{bus['id']}"):
+                    st.session_state.buses = [b for b in st.session_state.buses if b['id'] != bus['id']]
+                    st.session_state.lines = [l for l in st.session_state.lines 
+                                             if l['from'] != bus['id'] and l['to'] != bus['id']]
+                    st.session_state.loads = [l for l in st.session_state.loads if l['bus'] != bus['id']]
+                    st.session_state.generators = [g for g in st.session_state.generators if g['bus'] != bus['id']]
+                    st.rerun()
+        
+        if st.session_state.lines:
+            st.write("### 🔗 Linhas de Transmissão")
+            for line in st.session_state.lines:
+                st.write(f"Linha {line['id']}: Barra {line['from']} → Barra {line['to']} "
+                        f"(R={line['r_ohm_per_km']}Ω/km, X={line['x_ohm_per_km']}Ω/km)")
+        
+        if st.session_state.loads:
+            st.write("### 📊 Cargas")
+            for load in st.session_state.loads:
+                st.write(f"Carga {load['id']} na Barra {load['bus']}: "
+                        f"P={load['p_mw']} MW, Q={load['q_mvar']} MVar")
+        
+        if st.session_state.generators:
+            st.write("### ⚡ Geradores")
+            for gen in st.session_state.generators:
+                st.write(f"Gerador {gen['id']} na Barra {gen['bus']}: "
+                        f"P={gen['p_mw']} MW, Vm={gen['vm_pu']} pu")
 
 with col2:
-    # Painel de informações
-    st.subheader("📊 Informações")
+    st.subheader("📊 Informações Detalhadas")
     
     # Estatísticas
-    with st.expander("📈 Estatísticas", expanded=True):
+    with st.expander("📈 Estatísticas do Sistema", expanded=True):
         st.metric("🚏 Barras", len(st.session_state.buses))
-        st.metric("📍 Linhas", len(st.session_state.lines))
+        st.metric("🔗 Linhas", len(st.session_state.lines))
         st.metric("📊 Cargas", len(st.session_state.loads))
         st.metric("⚡ Geradores", len(st.session_state.generators))
         
@@ -686,6 +413,10 @@ with col2:
                 st.markdown("---")
                 st.metric("💡 Carga Total", f"{total_load:.1f} MW")
                 st.metric("🔋 Geração Total", f"{total_gen:.1f} MW")
+                if total_gen > 0:
+                    balance = total_gen - total_load
+                    st.metric("⚖️ Balanço", f"{balance:.1f} MW", 
+                             delta="Superávit" if balance > 0 else "Déficit")
     
     # Barra selecionada
     if st.session_state.selected_bus is not None:
@@ -695,6 +426,21 @@ with col2:
                 st.write(f"**ID:** {bus['id']}")
                 st.write(f"**Tipo:** {bus['type'].upper()}")
                 st.write(f"**Tensão nominal:** {bus['vn_kv']} kV")
+                st.write(f"**Posição:** ({bus['x']}, {bus['y']})")
+                
+                # Editar propriedades
+                with st.form(key=f"edit_bus_{bus['id']}"):
+                    new_name = st.text_input("Nome", bus['name'])
+                    new_type = st.selectbox("Tipo", ["slack", "pv", "pq"], 
+                                          index=["slack", "pv", "pq"].index(bus['type']))
+                    new_vn = st.number_input("Tensão Nominal (kV)", value=float(bus['vn_kv']))
+                    
+                    if st.form_submit_button("💾 Salvar Alterações"):
+                        bus['name'] = new_name
+                        bus['type'] = new_type
+                        bus['vn_kv'] = new_vn
+                        st.success("Barra atualizada!")
+                        st.rerun()
                 
                 # Elementos conectados
                 lines_connected = [l for l in st.session_state.lines if l['from'] == bus['id'] or l['to'] == bus['id']]
@@ -702,40 +448,122 @@ with col2:
                     st.write("**Linhas conectadas:**")
                     for line in lines_connected:
                         other = line['to'] if line['from'] == bus['id'] else line['from']
-                        st.caption(f"→ Barra {other}")
+                        st.caption(f"→ Barra {other} (Linha {line['id']})")
                 
                 load = next((l for l in st.session_state.loads if l['bus'] == bus['id']), None)
                 if load:
-                    st.write("**Carga:**")
-                    st.caption(f"P = {load['p_mw']} MW | Q = {load['q_mvar']} MVar")
+                    st.write("**Carga conectada:**")
+                    with st.form(key=f"edit_load_{load['id']}"):
+                        new_p = st.number_input("P (MW)", value=float(load['p_mw']), key=f"p_load_{load['id']}")
+                        new_q = st.number_input("Q (MVar)", value=float(load['q_mvar']), key=f"q_load_{load['id']}")
+                        if st.form_submit_button("💾 Atualizar Carga"):
+                            load['p_mw'] = new_p
+                            load['q_mvar'] = new_q
+                            st.success("Carga atualizada!")
+                            st.rerun()
                 
                 gen = next((g for g in st.session_state.generators if g['bus'] == bus['id']), None)
                 if gen:
-                    st.write("**Gerador:**")
-                    st.caption(f"P = {gen['p_mw']} MW | Vm = {gen['vm_pu']} pu")
+                    st.write("**Gerador conectado:**")
+                    with st.form(key=f"edit_gen_{gen['id']}"):
+                        new_p = st.number_input("P (MW)", value=float(gen['p_mw']), key=f"p_gen_{gen['id']}")
+                        new_vm = st.number_input("Vm (pu)", value=float(gen['vm_pu']), key=f"vm_gen_{gen['id']}")
+                        if st.form_submit_button("💾 Atualizar Gerador"):
+                            gen['p_mw'] = new_p
+                            gen['vm_pu'] = new_vm
+                            st.success("Gerador atualizada!")
+                            st.rerun()
     
-    # Resultados
+    # Resultados da análise
     if st.session_state.results:
-        with st.expander("📈 Resultados", expanded=True):
+        with st.expander("📈 Resultados da Análise", expanded=True):
             results = st.session_state.results
-            st.write(f"**Tipo:** {results['type']}")
-            st.write(f"**Data:** {datetime.fromisoformat(results['timestamp']).strftime('%H:%M:%S')}")
+            
+            st.write(f"**Tipo:** {results['type'].replace('_', ' ').title()}")
+            st.write(f"**Data:** {datetime.fromisoformat(results['timestamp']).strftime('%d/%m/%Y %H:%M:%S')}")
             
             if results['type'] == 'power_flow':
-                st.write("**Tensões (pu):**")
+                st.write("**Tensões nas Barras:**")
                 voltages = results['data']['voltages']
                 for i, v in enumerate(voltages):
-                    status = "✅" if 0.95 <= v <= 1.05 else "⚠️" if 0.9 <= v < 0.95 or 1.05 < v <= 1.1 else "❌"
-                    st.caption(f"{status} Barra {i}: {v:.3f}")
+                    if 0.95 <= v <= 1.05:
+                        status = "✅ Normal"
+                    elif 0.9 <= v < 0.95 or 1.05 < v <= 1.1:
+                        status = "⚠️ Atenção"
+                    else:
+                        status = "❌ Crítico"
+                    st.caption(f"Barra {i}: {v:.3f} pu - {status}")
+                
+                if len(voltages) > 0:
+                    avg_v = np.mean(voltages)
+                    min_v = np.min(voltages)
+                    max_v = np.max(voltages)
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Média", f"{avg_v:.3f}")
+                    with col2:
+                        st.metric("Mínima", f"{min_v:.3f}")
+                    with col3:
+                        st.metric("Máxima", f"{max_v:.3f}")
             
             elif results['type'] == 'short_circuit':
-                st.write("**Correntes de falta (kA):**")
+                st.write("**Correntes de Curto-Circuito:**")
                 currents = results['data']['fault_currents']
                 for i, c in enumerate(currents):
-                    st.caption(f"Barra {i}: {c:.2f} kA")
+                    if c > 10:
+                        level = "🔴 Alto"
+                    elif c > 5:
+                        level = "🟡 Médio"
+                    else:
+                        level = "🟢 Baixo"
+                    st.caption(f"Barra {i}: {c:.2f} kA - {level}")
+                
+                st.write("**Barras Críticas:**")
+                for bus_idx, current in results['data']['critical_buses']:
+                    st.warning(f"Barra {bus_idx}: {current:.2f} kA")
+    
+    # Histórico de análises
+    if st.session_state.history:
+        with st.expander(f"📋 Histórico ({len(st.session_state.history)} análises)"):
+            for i, hist in enumerate(reversed(st.session_state.history)):
+                icon = "🔄" if hist['type'] == 'power_flow' else "⚡"
+                type_str = "Fluxo de Potência" if hist['type'] == 'power_flow' else "Curto-Circuito"
+                time_str = datetime.fromisoformat(hist['timestamp']).strftime('%H:%M:%S')
+                
+                if st.button(f"{icon} {type_str} - {time_str}", key=f"hist_{i}"):
+                    st.session_state.results = hist
+                    st.rerun()
 
 # Rodapé
 st.markdown("---")
+st.subheader("📖 Legenda")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("""
+    **Tipos de Barras:**
+    - 🔴 **Slack**: Barra de referência
+    - 🟢 **PV**: Geração controlada
+    - 🟠 **PQ**: Carga fixa
+    """)
+
+with col2:
+    st.markdown("""
+    **Status de Tensão:**
+    - ✅ **0.95-1.05 pu**: Normal
+    - ⚠️ **0.90-0.94 / 1.06-1.10**: Atenção
+    - ❌ **<0.90 / >1.10**: Crítico
+    """)
+
+with col3:
+    st.markdown("""
+    **Níveis de Corrente:**
+    - 🟢 **< 5 kA**: Baixo
+    - 🟡 **5-10 kA**: Médio
+    - 🔴 **> 10 kA**: Alto
+    """)
+
 st.caption("Power System Studio v1.0 | Desenvolvido com Streamlit | ⚡ Análise de Sistemas Elétricos")
 
 # Informações técnicas
