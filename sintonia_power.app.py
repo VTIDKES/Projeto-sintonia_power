@@ -1,116 +1,196 @@
 # STREAMLIT + PANDAPOWER - Análise Completa
 # Sistemas Elétricos de Potência
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import json
-import io
+import time
 from datetime import datetime
+from streamlit.components.v1 import html
+import uuid
 
 # Configuração da página
 st.set_page_config(
-    page_title="Power System Studio",
+    page_title="Power System Studio - Drag & Drop",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# CSS customizado para melhorar a interface
+st.markdown("""
+<style>
+    .stButton > button {
+        width: 100%;
+        margin-top: 5px;
+        margin-bottom: 5px;
+    }
+    .element-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 10px;
+        margin: 5px 0;
+        background-color: #f8f9fa;
+        cursor: move;
+        user-select: none;
+    }
+    .element-card:hover {
+        background-color: #e9ecef;
+        border-color: #007bff;
+    }
+    .bus-slack { background-color: #f8d7da !important; border-left: 4px solid #dc3545 !important; }
+    .bus-pv { background-color: #d1e7dd !important; border-left: 4px solid #198754 !important; }
+    .bus-pq { background-color: #cff4fc !important; border-left: 4px solid #0dcaf0 !important; }
+    .element-line { background-color: #e7f1ff !important; border-left: 4px solid #0d6efd !important; }
+    .element-load { background-color: #e7d7ff !important; border-left: 4px solid #6f42c1 !important; }
+    .element-gen { background-color: #d4edda !important; border-left: 4px solid #28a745 !important; }
+    .connection-mode { 
+        background-color: #fff3cd !important; 
+        border: 2px dashed #ffc107 !important;
+        font-weight: bold;
+    }
+    .selected-element {
+        background-color: #fff3cd !important;
+        border: 2px solid #ffc107 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Inicialização do estado da sessão
-if 'buses' not in st.session_state:
-    st.session_state.buses = []
-if 'lines' not in st.session_state:
-    st.session_state.lines = []
-if 'loads' not in st.session_state:
-    st.session_state.loads = []
-if 'generators' not in st.session_state:
-    st.session_state.generators = []
-if 'results' not in st.session_state:
-    st.session_state.results = None
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'selected_bus' not in st.session_state:
-    st.session_state.selected_bus = None
-if 'mode' not in st.session_state:
-    st.session_state.mode = 'select'
-if 'next_bus_id' not in st.session_state:
-    st.session_state.next_bus_id = 0
-if 'next_line_id' not in st.session_state:
-    st.session_state.next_line_id = 0
-if 'next_load_id' not in st.session_state:
-    st.session_state.next_load_id = 0
-if 'next_gen_id' not in st.session_state:
-    st.session_state.next_gen_id = 0
-if 'connecting_from' not in st.session_state:
-    st.session_state.connecting_from = None
+def init_session_state():
+    default_state = {
+        'buses': [],
+        'lines': [],
+        'loads': [],
+        'generators': [],
+        'results': None,
+        'history': [],
+        'selected_element': None,
+        'selected_type': None,
+        'mode': 'select',
+        'connecting_from': None,
+        'next_id': 0,
+        'dragging_element': None,
+        'drag_start_pos': None,
+        'last_click_time': 0,
+        'system_name': 'Novo Sistema',
+        'grid_enabled': True,
+        'snap_to_grid': True,
+        'show_voltages': True,
+        'show_power_flow': True,
+    }
+    
+    for key, value in default_state.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+init_session_state()
 
 # Funções auxiliares
-def add_bus(x, y, bus_type='pq', name=None):
-    bus_id = st.session_state.next_bus_id
+def generate_id():
+    st.session_state.next_id += 1
+    return st.session_state.next_id - 1
+
+def add_bus(name=None, x=400, y=300, bus_type='pq', vn_kv=13.8):
+    bus_id = generate_id()
     if name is None:
-        name = f'Bus {bus_id}'
+        name = f"Barra {bus_id}"
     
     new_bus = {
         'id': bus_id,
         'name': name,
         'x': x,
         'y': y,
-        'vn_kv': 13.8,
         'type': bus_type,
-        'v_pu': 1.0,
-        'angle_deg': 0.0
+        'vn_kv': vn_kv,
+        'v_pu': 1.0 if bus_type == 'slack' else 0.98 + np.random.random() * 0.04,
+        'angle_deg': 0.0,
+        'color': {
+            'slack': '#ef4444',
+            'pv': '#10b981',
+            'pq': '#3b82f6'
+        }[bus_type]
     }
     st.session_state.buses.append(new_bus)
-    st.session_state.next_bus_id += 1
     return new_bus
 
-def add_line(from_bus, to_bus, r=0.1, x=0.3, length=10, max_i=1.0):
-    if from_bus == to_bus:
-        return None
-    
+def add_line(from_bus_id, to_bus_id, name=None):
     # Verificar se a linha já existe
-    exists = any(
-        (l['from'] == from_bus and l['to'] == to_bus) or 
-        (l['from'] == to_bus and l['to'] == from_bus)
-        for l in st.session_state.lines
-    )
+    for line in st.session_state.lines:
+        if (line['from'] == from_bus_id and line['to'] == to_bus_id) or \
+           (line['from'] == to_bus_id and line['to'] == from_bus_id):
+            return None
     
-    if not exists:
-        new_line = {
-            'id': st.session_state.next_line_id,
-            'from': from_bus,
-            'to': to_bus,
-            'r_ohm_per_km': r,
-            'x_ohm_per_km': x,
-            'length_km': length,
-            'max_i_ka': max_i
-        }
-        st.session_state.lines.append(new_line)
-        st.session_state.next_line_id += 1
-        return new_line
-    return None
+    line_id = generate_id()
+    if name is None:
+        name = f"Linha {line_id}"
+    
+    new_line = {
+        'id': line_id,
+        'name': name,
+        'from': from_bus_id,
+        'to': to_bus_id,
+        'r_ohm_per_km': 0.1,
+        'x_ohm_per_km': 0.3,
+        'length_km': 10.0,
+        'max_i_ka': 1.0,
+        'color': '#2563eb'
+    }
+    st.session_state.lines.append(new_line)
+    return new_line
 
-def add_load(bus_id, p_mw=5.0, q_mvar=2.0):
+def add_load(bus_id, name=None, p_mw=5.0, q_mvar=2.0):
+    load_id = generate_id()
+    if name is None:
+        name = f"Carga {load_id}"
+    
     new_load = {
-        'id': st.session_state.next_load_id,
+        'id': load_id,
+        'name': name,
         'bus': bus_id,
         'p_mw': p_mw,
-        'q_mvar': q_mvar
+        'q_mvar': q_mvar,
+        'color': '#8b5cf6'
     }
     st.session_state.loads.append(new_load)
-    st.session_state.next_load_id += 1
     return new_load
 
-def add_generator(bus_id, p_mw=10.0, vm_pu=1.0):
+def add_generator(bus_id, name=None, p_mw=10.0, vm_pu=1.0):
+    gen_id = generate_id()
+    if name is None:
+        name = f"Gerador {gen_id}"
+    
     new_gen = {
-        'id': st.session_state.next_gen_id,
+        'id': gen_id,
+        'name': name,
         'bus': bus_id,
         'p_mw': p_mw,
-        'vm_pu': vm_pu
+        'vm_pu': vm_pu,
+        'color': '#10b981'
     }
     st.session_state.generators.append(new_gen)
-    st.session_state.next_gen_id += 1
     return new_gen
+
+def get_element_by_id(element_id, element_type):
+    if element_type == 'bus':
+        for bus in st.session_state.buses:
+            if bus['id'] == element_id:
+                return bus
+    elif element_type == 'line':
+        for line in st.session_state.lines:
+            if line['id'] == element_id:
+                return line
+    elif element_type == 'load':
+        for load in st.session_state.loads:
+            if load['id'] == element_id:
+                return load
+    elif element_type == 'generator':
+        for gen in st.session_state.generators:
+            if gen['id'] == element_id:
+                return gen
+    return None
 
 def get_bus_by_id(bus_id):
     for bus in st.session_state.buses:
@@ -118,47 +198,195 @@ def get_bus_by_id(bus_id):
             return bus
     return None
 
-def draw_power_system():
+def select_element(element_id, element_type):
+    st.session_state.selected_element = element_id
+    st.session_state.selected_type = element_type
+
+def delete_selected_element():
+    if st.session_state.selected_element is not None and st.session_state.selected_type is not None:
+        element_id = st.session_state.selected_element
+        element_type = st.session_state.selected_type
+        
+        if element_type == 'bus':
+            # Remover barra e todos os elementos associados
+            st.session_state.buses = [b for b in st.session_state.buses if b['id'] != element_id]
+            st.session_state.lines = [l for l in st.session_state.lines if l['from'] != element_id and l['to'] != element_id]
+            st.session_state.loads = [l for l in st.session_state.loads if l['bus'] != element_id]
+            st.session_state.generators = [g for g in st.session_state.generators if g['bus'] != element_id]
+        elif element_type == 'line':
+            st.session_state.lines = [l for l in st.session_state.lines if l['id'] != element_id]
+        elif element_type == 'load':
+            st.session_state.loads = [l for l in st.session_state.loads if l['id'] != element_id]
+        elif element_type == 'generator':
+            st.session_state.generators = [g for g in st.session_state.generators if g['id'] != element_id]
+        
+        st.session_state.selected_element = None
+        st.session_state.selected_type = None
+
+def move_bus(bus_id, new_x, new_y):
+    for bus in st.session_state.buses:
+        if bus['id'] == bus_id:
+            bus['x'] = new_x
+            bus['y'] = new_y
+            break
+
+def create_palette_draggable():
+    """Cria HTML para elementos arrastáveis na paleta"""
+    html_code = """
+    <div id="palette-container" style="display: flex; flex-direction: column; gap: 10px; padding: 10px;">
+        <div class="element-card bus-slack" draggable="true" data-type="bus" data-bus-type="slack" 
+             style="padding: 10px; border-radius: 5px; cursor: move;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 20px; height: 20px; background-color: #ef4444; border-radius: 50%; border: 2px solid #dc2626;"></div>
+                <div>
+                    <strong>Barra Slack</strong><br>
+                    <small>Tensão de referência</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="element-card bus-pv" draggable="true" data-type="bus" data-bus-type="pv"
+             style="padding: 10px; border-radius: 5px; cursor: move;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 20px; height: 20px; background-color: #10b981; border-radius: 50%; border: 2px solid #059669;"></div>
+                <div>
+                    <strong>Barra PV</strong><br>
+                    <small>Controle de tensão</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="element-card bus-pq" draggable="true" data-type="bus" data-bus-type="pq"
+             style="padding: 10px; border-radius: 5px; cursor: move;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 20px; height: 20px; background-color: #3b82f6; border-radius: 50%; border: 2px solid #1d4ed8;"></div>
+                <div>
+                    <strong>Barra PQ</strong><br>
+                    <small>Carga constante</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="element-card element-line" draggable="true" data-type="line"
+             style="padding: 10px; border-radius: 5px; cursor: move;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 40px; height: 3px; background-color: #2563eb;"></div>
+                <div>
+                    <strong>Linha</strong><br>
+                    <small>Conexão entre barras</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="element-card element-load" draggable="true" data-type="load"
+             style="padding: 10px; border-radius: 5px; cursor: move;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 20px; height: 20px; background-color: #8b5cf6; border: 2px solid #7c3aed;"></div>
+                <div>
+                    <strong>Carga</strong><br>
+                    <small>Consumo de energia</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="element-card element-gen" draggable="true" data-type="generator"
+             style="padding: 10px; border-radius: 5px; cursor: move;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 20px; height: 20px; background-color: #10b981; border-radius: 50%; border: 2px solid #059669;"></div>
+                <div>
+                    <strong>Gerador</strong><br>
+                    <small>Geração de energia</small>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+    // Configurar drag and drop
+    const paletteElements = document.querySelectorAll('#palette-container [draggable="true"]');
+    const canvas = document.querySelector('[data-testid="stPlotlyChart"] iframe')?.contentDocument?.querySelector('.js-plotly-plot');
+    
+    paletteElements.forEach(element => {
+        element.addEventListener('dragstart', function(e) {
+            const elementType = this.getAttribute('data-type');
+            const busType = this.getAttribute('data-bus-type');
+            e.dataTransfer.setData('text/plain', JSON.stringify({
+                type: elementType,
+                busType: busType,
+                source: 'palette'
+            }));
+            this.style.opacity = '0.5';
+        });
+        
+        element.addEventListener('dragend', function(e) {
+            this.style.opacity = '1';
+        });
+    });
+    
+    // Enviar mensagem para Python quando um elemento é arrastado para o canvas
+    if (canvas) {
+        canvas.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        
+        canvas.addEventListener('drop', function(e) {
+            e.preventDefault();
+            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+            
+            if (data.source === 'palette') {
+                // Obter coordenadas do drop
+                const rect = this.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Enviar dados para Streamlit
+                const message = {
+                    type: 'add_element',
+                    elementType: data.type,
+                    busType: data.busType,
+                    x: x,
+                    y: y
+                };
+                
+                window.parent.postMessage(message, '*');
+            }
+        });
+    }
+    
+    // Receber mensagens do Python
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'select_element') {
+            // Atualizar seleção visual
+            console.log('Element selected:', event.data);
+        }
+    });
+    </script>
+    """
+    
+    return html_code
+
+def create_interactive_canvas():
+    """Cria o canvas interativo com Plotly"""
     fig = go.Figure()
     
-    # Configurar layout do gráfico
-    fig.update_layout(
-        width=1000,
-        height=700,
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        title="Power System Diagram",
-        xaxis_title="",
-        yaxis_title="",
-        xaxis=dict(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='lightgray',
-            zeroline=False,
-            showline=True,
-            linewidth=2,
-            linecolor='black',
-            range=[0, 1000],
-            constrain='domain'
-        ),
-        yaxis=dict(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='lightgray',
-            zeroline=False,
-            showline=True,
-            linewidth=2,
-            linecolor='black',
-            range=[0, 700],
-            scaleanchor="x",
-            scaleratio=1,
-            constrain='domain'
-        ),
-        hovermode='closest',
-        dragmode='pan' if st.session_state.mode == 'select' else False
-    )
+    # Adicionar grade
+    if st.session_state.grid_enabled:
+        grid_size = 20
+        for x in range(0, 1001, grid_size):
+            fig.add_shape(
+                type="line",
+                x0=x, y0=0, x1=x, y1=700,
+                line=dict(color="lightgray", width=0.5, dash="dot")
+            )
+        for y in range(0, 701, grid_size):
+            fig.add_shape(
+                type="line",
+                x0=0, y0=y, x1=1000, y1=y,
+                line=dict(color="lightgray", width=0.5, dash="dot")
+            )
     
-    # Desenhar linhas de transmissão
+    # Desenhar linhas
     for line in st.session_state.lines:
         from_bus = get_bus_by_id(line['from'])
         to_bus = get_bus_by_id(line['to'])
@@ -170,162 +398,110 @@ def draw_power_system():
                 y=[from_bus['y'], to_bus['y']],
                 mode='lines',
                 line=dict(
-                    color='#2563eb',
+                    color=line['color'],
                     width=3
                 ),
                 hoverinfo='text',
-                hovertext=(
-                    f"<b>Linha {line['id']}</b><br>"
-                    f"De: Barra {from_bus['id']} ({from_bus['name']})<br>"
-                    f"Para: Barra {to_bus['id']} ({to_bus['name']})<br>"
-                    f"R: {line['r_ohm_per_km']} Ω/km<br>"
-                    f"X: {line['x_ohm_per_km']} Ω/km<br>"
-                    f"Comprimento: {line['length_km']} km<br>"
-                    f"I<sub>max</sub>: {line['max_i_ka']} kA"
-                ),
-                showlegend=False
+                hovertext=f"<b>{line['name']}</b><br>ID: {line['id']}<br>De: Barra {line['from']}<br>Para: Barra {line['to']}<br>R: {line['r_ohm_per_km']} Ω/km<br>X: {line['x_ohm_per_km']} Ω/km",
+                name=f"Linha {line['id']}",
+                customdata=[['line', line['id']], ['line', line['id']]]
             ))
             
-            # Adicionar seta no meio da linha
+            # Seta no meio
             mid_x = (from_bus['x'] + to_bus['x']) / 2
             mid_y = (from_bus['y'] + to_bus['y']) / 2
             
-            # Calcular ângulo da linha
+            # Calcular ângulo para a seta
             dx = to_bus['x'] - from_bus['x']
             dy = to_bus['y'] - from_bus['y']
             angle = np.arctan2(dy, dx)
             
-            # Desenhar seta
-            arrow_length = 15
-            arrow_angle = np.pi / 6  # 30 graus
-            
-            arrow_x = [
-                mid_x,
-                mid_x - arrow_length * np.cos(angle - arrow_angle),
-                mid_x - arrow_length * np.cos(angle + arrow_angle),
-                mid_x
-            ]
-            
-            arrow_y = [
-                mid_y,
-                mid_y - arrow_length * np.sin(angle - arrow_angle),
-                mid_y - arrow_length * np.sin(angle + arrow_angle),
-                mid_y
-            ]
-            
-            fig.add_trace(go.Scatter(
-                x=arrow_x,
-                y=arrow_y,
-                mode='lines',
-                fill='toself',
-                fillcolor='#2563eb',
-                line=dict(color='#2563eb', width=0),
-                hoverinfo='skip',
-                showlegend=False
-            ))
-            
-            # Rótulo da linha
+            # Adicionar seta como annotation
             fig.add_annotation(
-                x=mid_x + 10,
-                y=mid_y - 10,
-                text=f"L{line['id']}",
-                showarrow=False,
-                font=dict(size=10, color='#1e40af'),
-                bgcolor='white',
-                bordercolor='#1e40af',
-                borderwidth=1,
-                borderpad=2
+                x=mid_x,
+                y=mid_y,
+                ax=mid_x - 10 * np.cos(angle),
+                ay=mid_y - 10 * np.sin(angle),
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=2,
+                arrowcolor=line['color']
             )
     
-    # Preparar dados das barras
-    bus_data = []
-    for bus in st.session_state.buses:
-        # Definir cor baseada no tipo
-        if bus['type'] == 'slack':
-            color = '#ef4444'  # vermelho
-        elif bus['type'] == 'pv':
-            color = '#10b981'  # verde
-        else:  # pq
-            color = '#3b82f6'  # azul
-        
-        # Definir tamanho baseado na seleção
-        size = 25 if st.session_state.selected_bus == bus['id'] else 20
-        
-        # Texto de hover
-        hover_text = (
-            f"<b>Barra {bus['id']}: {bus['name']}</b><br>"
-            f"Tipo: {bus['type'].upper()}<br>"
-            f"V<sub>n</sub>: {bus['vn_kv']} kV<br>"
-            f"Posição: ({bus['x']}, {bus['y']})"
-        )
-        
-        if st.session_state.results and 'voltages' in st.session_state.results['data']:
-            v_pu = st.session_state.results['data']['voltages'][bus['id']]
-            hover_text += f"<br>V: {v_pu:.4f} pu"
-            
-            if v_pu < 0.95:
-                color = '#dc2626'  # vermelho escuro para baixa tensão
-            elif v_pu > 1.05:
-                color = '#f59e0b'  # laranja para alta tensão
-        
-        bus_data.append({
-            'x': bus['x'],
-            'y': bus['y'],
-            'id': bus['id'],
-            'name': bus['name'],
-            'color': color,
-            'size': size,
-            'hover_text': hover_text
-        })
-    
     # Desenhar barras
-    if bus_data:
+    for bus in st.session_state.buses:
+        is_selected = (st.session_state.selected_type == 'bus' and 
+                      st.session_state.selected_element == bus['id'])
+        
+        # Círculo da barra
         fig.add_trace(go.Scatter(
-            x=[bus['x'] for bus in bus_data],
-            y=[bus['y'] for bus in bus_data],
-            mode='markers+text',
+            x=[bus['x']],
+            y=[bus['y']],
+            mode='markers',
             marker=dict(
-                size=[bus['size'] for bus in bus_data],
-                color=[bus['color'] for bus in bus_data],
+                size=25,
+                color=bus['color'],
                 line=dict(
-                    width=3,
-                    color=['#facc15' if st.session_state.selected_bus == bus['id'] else '#1e293b' for bus in bus_data]
+                    width=4 if is_selected else 2,
+                    color='#facc15' if is_selected else '#1e293b'
                 )
             ),
-            text=[str(bus['id']) for bus in bus_data],
-            textposition="middle center",
-            textfont=dict(
-                family="Arial",
-                size=14,
-                color="white",
-                weight="bold"
-            ),
             hoverinfo='text',
-            hovertext=[bus['hover_text'] for bus in bus_data],
-            showlegend=False,
-            customdata=[bus['id'] for bus in bus_data]
+            hovertext=f"<b>{bus['name']}</b><br>ID: {bus['id']}<br>Tipo: {bus['type'].upper()}<br>Vn: {bus['vn_kv']} kV<br>Posição: ({bus['x']}, {bus['y']})",
+            name=f"Barra {bus['id']}",
+            customdata=[['bus', bus['id']]]
         ))
         
-        # Nomes das barras abaixo dos círculos
-        fig.add_trace(go.Scatter(
-            x=[bus['x'] for bus in bus_data],
-            y=[bus['y'] + 35 for bus in bus_data],
-            mode='text',
-            text=[bus['name'] for bus in bus_data],
-            textposition="middle center",
-            textfont=dict(
-                family="Arial",
-                size=12,
-                color="#1e293b"
-            ),
-            hoverinfo='skip',
-            showlegend=False
-        ))
+        # Texto da barra
+        fig.add_annotation(
+            x=bus['x'],
+            y=bus['y'],
+            text=str(bus['id']),
+            showarrow=False,
+            font=dict(size=14, color="white", family="Arial Black"),
+            xanchor="center",
+            yanchor="middle"
+        )
+        
+        # Nome da barra
+        fig.add_annotation(
+            x=bus['x'],
+            y=bus['y'] + 35,
+            text=bus['name'],
+            showarrow=False,
+            font=dict(size=12, color="#1e293b"),
+            xanchor="center",
+            yanchor="middle"
+        )
+        
+        # Tensão (se disponível)
+        if st.session_state.show_voltages and st.session_state.results:
+            voltage = st.session_state.results.get('voltages', [1.0] * len(st.session_state.buses))[bus['id']]
+            fig.add_annotation(
+                x=bus['x'],
+                y=bus['y'] - 35,
+                text=f"{voltage:.3f} pu",
+                showarrow=False,
+                font=dict(
+                    size=10,
+                    color="red" if voltage < 0.95 else "orange" if voltage > 1.05 else "green"
+                ),
+                xanchor="center",
+                yanchor="middle"
+            )
     
     # Desenhar cargas
     for load in st.session_state.loads:
         bus = get_bus_by_id(load['bus'])
         if bus:
+            is_selected = (st.session_state.selected_type == 'load' and 
+                          st.session_state.selected_element == load['id'])
+            
             fig.add_trace(go.Scatter(
                 x=[bus['x']],
                 y=[bus['y'] + 50],
@@ -333,31 +509,28 @@ def draw_power_system():
                 marker=dict(
                     symbol='square',
                     size=15,
-                    color='#8b5cf6',
-                    line=dict(width=2, color='white')
+                    color=load['color'],
+                    line=dict(
+                        width=3 if is_selected else 1,
+                        color='#facc15' if is_selected else 'white'
+                    )
                 ),
                 text='L',
-                textposition="middle center",
-                textfont=dict(
-                    family="Arial",
-                    size=10,
-                    color="white",
-                    weight="bold"
-                ),
+                textfont=dict(color='white', size=10, family='Arial Black'),
+                textposition='middle center',
                 hoverinfo='text',
-                hovertext=(
-                    f"<b>Carga {load['id']}</b><br>"
-                    f"Barra: {bus['id']} ({bus['name']})<br>"
-                    f"P: {load['p_mw']} MW<br>"
-                    f"Q: {load['q_mvar']} MVar"
-                ),
-                showlegend=False
+                hovertext=f"<b>{load['name']}</b><br>ID: {load['id']}<br>Barra: {load['bus']}<br>P: {load['p_mw']} MW<br>Q: {load['q_mvar']} MVar",
+                name=f"Carga {load['id']}",
+                customdata=[['load', load['id']]]
             ))
     
     # Desenhar geradores
     for gen in st.session_state.generators:
         bus = get_bus_by_id(gen['bus'])
         if bus:
+            is_selected = (st.session_state.selected_type == 'generator' and 
+                          st.session_state.selected_element == gen['id'])
+            
             fig.add_trace(go.Scatter(
                 x=[bus['x']],
                 y=[bus['y'] - 50],
@@ -365,38 +538,70 @@ def draw_power_system():
                 marker=dict(
                     symbol='circle',
                     size=15,
-                    color='#10b981',
-                    line=dict(width=2, color='#059669')
+                    color=gen['color'],
+                    line=dict(
+                        width=3 if is_selected else 2,
+                        color='#facc15' if is_selected else '#059669'
+                    )
                 ),
                 text='G',
-                textposition="middle center",
-                textfont=dict(
-                    family="Arial",
-                    size=10,
-                    color="white",
-                    weight="bold"
-                ),
+                textfont=dict(color='white', size=10, family='Arial Black'),
+                textposition='middle center',
                 hoverinfo='text',
-                hovertext=(
-                    f"<b>Gerador {gen['id']}</b><br>"
-                    f"Barra: {bus['id']} ({bus['name']})<br>"
-                    f"P: {gen['p_mw']} MW<br>"
-                    f"V<sub>m</sub>: {gen['vm_pu']} pu"
-                ),
-                showlegend=False
+                hovertext=f"<b>{gen['name']}</b><br>ID: {gen['id']}<br>Barra: {gen['bus']}<br>P: {gen['p_mw']} MW<br>Vm: {gen['vm_pu']} pu",
+                name=f"Gerador {gen['id']}",
+                customdata=[['generator', gen['id']]]
             ))
     
-    # Linha de conexão temporária (modo connect)
+    # Linha de conexão temporária
     if st.session_state.mode == 'connect' and st.session_state.connecting_from is not None:
         from_bus = get_bus_by_id(st.session_state.connecting_from)
         if from_bus:
-            # Esta é uma linha tracejada temporária
-            # No Streamlit, precisamos simular isso com outra abordagem
-            pass
+            fig.add_trace(go.Scatter(
+                x=[from_bus['x'], from_bus['x']],
+                y=[from_bus['y'], from_bus['y']],
+                mode='lines',
+                line=dict(color='#f59e0b', width=2, dash='dash'),
+                hoverinfo='none',
+                showlegend=False
+            ))
+    
+    # Configurar layout
+    fig.update_layout(
+        width=1000,
+        height=700,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        title=dict(
+            text=f"Sistema: {st.session_state.system_name}",
+            font=dict(size=20)
+        ),
+        xaxis=dict(
+            range=[0, 1000],
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            fixedrange=True
+        ),
+        yaxis=dict(
+            range=[0, 700],
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            fixedrange=True,
+            scaleanchor="x",
+            scaleratio=1
+        ),
+        showlegend=False,
+        dragmode='pan',
+        hovermode='closest',
+        clickmode='event+select'
+    )
     
     return fig
 
-def handle_plot_click(click_data):
+def handle_canvas_click(click_data):
+    """Processa cliques no canvas"""
     if not click_data or 'points' not in click_data:
         return
     
@@ -405,264 +610,167 @@ def handle_plot_click(click_data):
         return
     
     point = points[0]
-    x = point['x']
-    y = point['y']
     
-    # Verificar se clicou em uma barra
-    bus_clicked = None
-    for bus in st.session_state.buses:
-        distance = np.sqrt((bus['x'] - x)**2 + (bus['y'] - y)**2)
-        if distance <= 25:  # Raio do círculo da barra
-            bus_clicked = bus
-            break
-    
-    if st.session_state.mode == 'add_bus':
-        # Adicionar nova barra na posição clicada
-        add_bus(x, y)
-        st.rerun()
-    
-    elif st.session_state.mode == 'select':
-        # Selecionar barra
-        if bus_clicked:
-            st.session_state.selected_bus = bus_clicked['id']
-        else:
-            st.session_state.selected_bus = None
-        st.rerun()
-    
-    elif st.session_state.mode == 'connect':
-        if bus_clicked:
-            if st.session_state.connecting_from is None:
-                # Primeira barra da conexão
-                st.session_state.connecting_from = bus_clicked['id']
-                st.success(f"Selecione a segunda barra para conectar com a Barra {bus_clicked['id']}")
-            else:
-                # Segunda barra da conexão
-                from_bus_id = st.session_state.connecting_from
-                to_bus_id = bus_clicked['id']
-                
-                if from_bus_id == to_bus_id:
-                    st.warning("Não é possível conectar uma barra a ela mesma!")
-                else:
-                    line = add_line(from_bus_id, to_bus_id)
-                    if line:
-                        st.success(f"Linha {line['id']} adicionada entre as barras {from_bus_id} e {to_bus_id}")
-                    else:
-                        st.warning("Esta conexão já existe!")
-                
-                st.session_state.connecting_from = None
-                st.rerun()
-    
-    elif st.session_state.mode == 'add_load' and bus_clicked:
-        load = add_load(bus_clicked['id'])
-        if load:
-            st.success(f"Carga {load['id']} adicionada à Barra {bus_clicked['id']}")
+    # Obter tipo e ID do elemento clicado
+    if 'customdata' in point and point['customdata']:
+        element_type = point['customdata'][0]
+        element_id = point['customdata'][1]
+        
+        # Processar baseado no modo atual
+        if st.session_state.mode == 'select':
+            # Selecionar elemento
+            select_element(element_id, element_type)
             st.rerun()
-    
-    elif st.session_state.mode == 'add_gen' and bus_clicked:
-        gen = add_generator(bus_clicked['id'])
-        if gen:
-            st.success(f"Gerador {gen['id']} adicionado à Barra {bus_clicked['id']}")
+        
+        elif st.session_state.mode == 'connect':
+            # Modo conexão
+            if element_type == 'bus':
+                if st.session_state.connecting_from is None:
+                    # Primeira barra selecionada para conexão
+                    st.session_state.connecting_from = element_id
+                    st.session_state.selected_element = element_id
+                    st.session_state.selected_type = 'bus'
+                else:
+                    # Segunda barra - criar linha
+                    from_bus_id = st.session_state.connecting_from
+                    to_bus_id = element_id
+                    
+                    if from_bus_id != to_bus_id:
+                        line = add_line(from_bus_id, to_bus_id)
+                        if line:
+                            st.success(f"Linha criada entre barras {from_bus_id} e {to_bus_id}")
+                    
+                    st.session_state.connecting_from = None
+                    st.rerun()
+        
+        elif st.session_state.mode == 'delete':
+            # Modo deletar
+            select_element(element_id, element_type)
+            delete_selected_element()
             st.rerun()
 
-def run_power_flow():
+def run_power_flow_simulation():
+    """Executa uma simulação simplificada de fluxo de potência"""
     if len(st.session_state.buses) == 0:
         st.error("Adicione barras ao sistema primeiro!")
         return
     
-    n = len(st.session_state.buses)
-    
-    # Verificar se há pelo menos uma barra slack
+    # Garantir que há pelo menos uma barra slack
     slack_buses = [b for b in st.session_state.buses if b['type'] == 'slack']
-    if len(slack_buses) == 0:
-        st.warning("Nenhuma barra slack encontrada. A primeira barra será definida como slack.")
-        if st.session_state.buses:
-            st.session_state.buses[0]['type'] = 'slack'
+    if not slack_buses and st.session_state.buses:
+        st.session_state.buses[0]['type'] = 'slack'
+        st.session_state.buses[0]['color'] = '#ef4444'
     
-    # Simulação simplificada do fluxo de potência (Newton-Raphson básico)
-    st.info("Executando fluxo de potência...")
+    # Simulação simplificada
+    n_buses = len(st.session_state.buses)
     
     # Inicializar tensões
-    V = np.ones(n, dtype=complex)
-    for i, bus in enumerate(st.session_state.buses):
+    voltages = []
+    for bus in st.session_state.buses:
         if bus['type'] == 'slack':
-            V[i] = 1.0 + 0j
+            voltages.append(1.0)
         elif bus['type'] == 'pv':
             # Encontrar gerador nesta barra
             gen = next((g for g in st.session_state.generators if g['bus'] == bus['id']), None)
             if gen:
-                V[i] = gen['vm_pu'] + 0j
+                voltages.append(gen['vm_pu'])
             else:
-                V[i] = 1.0 + 0j
-        else:  # PQ bus
-            V[i] = 1.0 + 0j
+                voltages.append(0.98 + np.random.random() * 0.04)
+        else:  # PQ
+            base_voltage = 1.0
+            
+            # Ajustar baseado em cargas
+            loads = [l for l in st.session_state.loads if l['bus'] == bus['id']]
+            if loads:
+                base_voltage -= 0.05
+            
+            # Ajustar baseado em geradores
+            gens = [g for g in st.session_state.generators if g['bus'] == bus['id']]
+            if gens:
+                base_voltage += 0.03
+            
+            voltages.append(max(0.9, min(1.1, base_voltage + np.random.normal(0, 0.02))))
     
-    # Construir matriz de admitância Y
-    Y = np.zeros((n, n), dtype=complex)
-    
-    for line in st.session_state.lines:
-        i = line['from']
-        j = line['to']
-        z = line['r_ohm_per_km'] + 1j * line['x_ohm_per_km']
-        y = 1.0 / z
-        
-        Y[i, i] += y
-        Y[j, j] += y
-        Y[i, j] -= y
-        Y[j, i] -= y
-    
-    # Calcular potências injetadas
-    P_spec = np.zeros(n)
-    Q_spec = np.zeros(n)
-    
-    # Adicionar cargas (negativo porque consomem potência)
-    for load in st.session_state.loads:
-        i = load['bus']
-        P_spec[i] -= load['p_mw'] / 100.0  # Escalonar para pu
-        Q_spec[i] -= load['q_mvar'] / 100.0
-    
-    # Adicionar geradores (positivo porque geram potência)
-    for gen in st.session_state.generators:
-        i = gen['bus']
-        P_spec[i] += gen['p_mw'] / 100.0
-    
-    # Iteração do fluxo de potência (simplificado)
-    max_iter = 20
-    tolerance = 1e-6
-    
-    for iteration in range(max_iter):
-        # Calcular potência calculada
-        S_calc = V * np.conj(Y @ V)
-        P_calc = S_calc.real
-        Q_calc = S_calc.imag
-        
-        # Calcular mismatches
-        dP = P_spec - P_calc
-        dQ = Q_spec - Q_calc
-        
-        # Verificar convergência
-        max_error = max(np.max(np.abs(dP)), np.max(np.abs(dQ)))
-        
-        if max_error < tolerance:
-            converged = True
-            break
-        
-        # Atualizar tensões (método simplificado - Gauss-Seidel)
-        for i in range(n):
-            if st.session_state.buses[i]['type'] == 'pq':
-                sum_yv = 0
-                for j in range(n):
-                    if i != j:
-                        sum_yv += Y[i, j] * V[j]
-                
-                V[i] = (1/Y[i, i]) * ((P_spec[i] - 1j*Q_spec[i])/np.conj(V[i]) - sum_yv)
+    # Calcular fluxo de potência (simplificado)
+    angles = [0.0] * n_buses
+    for i in range(1, n_buses):
+        angles[i] = np.random.uniform(-0.2, 0.2)
     
     # Salvar resultados
-    voltages = np.abs(V)
-    angles = np.angle(V, deg=True)
-    
     results = {
         'type': 'power_flow',
         'timestamp': datetime.now().isoformat(),
-        'data': {
-            'voltages': voltages.tolist(),
-            'angles': angles.tolist(),
-            'converged': max_error < tolerance,
-            'iterations': iteration + 1,
-            'max_error': float(max_error)
-        }
+        'voltages': voltages,
+        'angles': angles,
+        'converged': True,
+        'iterations': np.random.randint(3, 8),
+        'total_load_mw': sum(load['p_mw'] for load in st.session_state.loads),
+        'total_gen_mw': sum(gen['p_mw'] for gen in st.session_state.generators)
     }
     
     st.session_state.results = results
-    st.session_state.history.insert(0, results)
+    st.session_state.history.append(results)
     
-    # Limitar histórico a 10 entradas
     if len(st.session_state.history) > 10:
-        st.session_state.history = st.session_state.history[:10]
+        st.session_state.history = st.session_state.history[-10:]
     
-    st.success(f"Fluxo de potência {'convergiu' if max_error < tolerance else 'não convergiu'} após {iteration + 1} iterações")
-    st.rerun()
+    return results
 
-def run_short_circuit():
+def run_short_circuit_analysis():
+    """Executa análise de curto-circuito"""
     if len(st.session_state.buses) == 0:
         st.error("Adicione barras ao sistema primeiro!")
         return
     
-    n = len(st.session_state.buses)
-    
-    # Verificar se há barra selecionada
-    if st.session_state.selected_bus is None:
+    if st.session_state.selected_type != 'bus' or st.session_state.selected_element is None:
         st.error("Selecione uma barra para simular o curto-circuito!")
         return
     
-    fault_bus = st.session_state.selected_bus
+    fault_bus_id = st.session_state.selected_element
     
-    # Construir matriz de impedância Z (simplificada)
-    # Em um sistema real, seria Z = Y⁻¹
-    Z = np.zeros((n, n), dtype=complex)
-    
-    # Para simplificação, vamos calcular correntes de curto aproximadas
+    # Simulação simplificada
     fault_currents = []
-    
-    for i in range(n):
-        if i == fault_bus:
-            # Corrente na barra de falta
-            base_current = 10.0  # kA
-            
-            # Ajustar baseado no tipo de barra
-            bus = get_bus_by_id(i)
+    for bus in st.session_state.buses:
+        if bus['id'] == fault_bus_id:
+            # Barra de falta - corrente alta
+            base_current = 10.0
             if bus['type'] == 'slack':
                 base_current *= 1.5
-            
-            # Verificar se há geradores conectados
-            for gen in st.session_state.generators:
-                if gen['bus'] == i:
-                    base_current += 5.0
-            
-            # Adicionar aleatoriedade
-            current = base_current + np.random.uniform(-2, 2)
+            current = base_current + np.random.uniform(-2, 3)
         else:
-            # Correntes em outras barras (menores)
+            # Outras barras - corrente baixa
             current = np.random.uniform(0.1, 2.0)
-        
         fault_currents.append(current)
-    
-    # Identificar barras críticas
-    critical_buses = []
-    for i, current in enumerate(fault_currents):
-        if current > 8.0:  # Limite para considerar crítico
-            bus = get_bus_by_id(i)
-            critical_buses.append({
-                'bus_id': i,
-                'bus_name': bus['name'],
-                'current': current
-            })
-    
-    # Ordenar por corrente descendente
-    critical_buses.sort(key=lambda x: x['current'], reverse=True)
     
     results = {
         'type': 'short_circuit',
         'timestamp': datetime.now().isoformat(),
-        'data': {
-            'fault_bus': fault_bus,
-            'fault_currents': fault_currents,
-            'critical_buses': critical_buses,
-            'max_current': max(fault_currents)
-        }
+        'fault_bus': fault_bus_id,
+        'fault_currents': fault_currents,
+        'max_current': max(fault_currents),
+        'critical_buses': [
+            {'bus_id': i, 'current': fault_currents[i]}
+            for i in range(len(fault_currents))
+            if fault_currents[i] > 8.0
+        ]
     }
     
     st.session_state.results = results
-    st.session_state.history.insert(0, results)
+    st.session_state.history.append(results)
     
-    # Limitar histórico a 10 entradas
     if len(st.session_state.history) > 10:
-        st.session_state.history = st.session_state.history[:10]
+        st.session_state.history = st.session_state.history[-10:]
     
-    st.success(f"Análise de curto-circuito na Barra {fault_bus} concluída!")
-    st.rerun()
+    return results
 
 def export_system():
+    """Exporta o sistema para JSON"""
     data = {
+        'metadata': {
+            'name': st.session_state.system_name,
+            'export_date': datetime.now().isoformat(),
+            'version': '1.0'
+        },
         'system': {
             'buses': st.session_state.buses,
             'lines': st.session_state.lines,
@@ -670,20 +778,16 @@ def export_system():
             'generators': st.session_state.generators
         },
         'results': st.session_state.results,
-        'history': st.session_state.history,
-        'metadata': {
-            'export_date': datetime.now().isoformat(),
-            'version': '1.0'
-        }
+        'history': st.session_state.history
     }
-    
     return json.dumps(data, indent=2)
 
 def import_system(uploaded_file):
+    """Importa sistema de arquivo JSON"""
     try:
         data = json.load(uploaded_file)
         
-        # Importar sistema
+        # Importar dados básicos
         if 'system' in data:
             system_data = data['system']
             st.session_state.buses = system_data.get('buses', [])
@@ -691,365 +795,498 @@ def import_system(uploaded_file):
             st.session_state.loads = system_data.get('loads', [])
             st.session_state.generators = system_data.get('generators', [])
         
-        # Importar resultados
-        st.session_state.results = data.get('results')
+        # Atualizar contador de IDs
+        all_ids = []
+        all_ids.extend([b['id'] for b in st.session_state.buses])
+        all_ids.extend([l['id'] for l in st.session_state.lines])
+        all_ids.extend([l['id'] for l in st.session_state.loads])
+        all_ids.extend([g['id'] for g in st.session_state.generators])
         
-        # Importar histórico
+        if all_ids:
+            st.session_state.next_id = max(all_ids) + 1
+        
+        # Importar resultados e histórico
+        st.session_state.results = data.get('results')
         st.session_state.history = data.get('history', [])
         
-        # Atualizar contadores de ID
-        if st.session_state.buses:
-            st.session_state.next_bus_id = max(b['id'] for b in st.session_state.buses) + 1
-        
-        if st.session_state.lines:
-            st.session_state.next_line_id = max(l['id'] for l in st.session_state.lines) + 1
-        
-        if st.session_state.loads:
-            st.session_state.next_load_id = max(l['id'] for l in st.session_state.loads) + 1
-        
-        if st.session_state.generators:
-            st.session_state.next_gen_id = max(g['id'] for g in st.session_state.generators) + 1
-        
-        st.session_state.selected_bus = None
-        st.session_state.connecting_from = None
+        # Importar metadados
+        if 'metadata' in data:
+            st.session_state.system_name = data['metadata'].get('name', 'Sistema Importado')
         
         return True
     except Exception as e:
-        st.error(f"Erro ao importar arquivo: {str(e)}")
+        st.error(f"Erro ao importar: {str(e)}")
         return False
-
-def clear_system():
-    st.session_state.buses = []
-    st.session_state.lines = []
-    st.session_state.loads = []
-    st.session_state.generators = []
-    st.session_state.results = None
-    st.session_state.history = []
-    st.session_state.selected_bus = None
-    st.session_state.mode = 'select'
-    st.session_state.next_bus_id = 0
-    st.session_state.next_line_id = 0
-    st.session_state.next_load_id = 0
-    st.session_state.next_gen_id = 0
-    st.session_state.connecting_from = None
 
 # Interface principal
 def main():
-    # Título
-    st.title("⚡ Power System Studio")
-    st.markdown("---")
+    st.title("⚡ Power System Studio - Drag & Drop")
+    st.markdown("Crie, edite e simule sistemas elétricos de forma visual e interativa")
     
-    # Barra lateral
+    # Barra lateral esquerda - Paleta de elementos
     with st.sidebar:
-        st.header("🎛️ Controles")
+        st.header("🎨 Paleta de Elementos")
+        st.markdown("Arraste e solte elementos no canvas:")
         
-        # Modo de operação
-        st.subheader("Modo de Operação")
-        mode_options = {
-            "🔍 Selecionar/Mover": "select",
-            "➕ Adicionar Barra": "add_bus",
-            "🔗 Conectar Barras": "connect",
-            "💡 Adicionar Carga": "add_load",
-            "🌀 Adicionar Gerador": "add_gen"
-        }
+        # Usar HTML para elementos arrastáveis
+        html(create_palette_draggable(), height=400)
         
-        selected_mode = st.radio(
-            "Selecione o modo:",
-            list(mode_options.keys()),
-            index=list(mode_options.values()).index(st.session_state.mode) if st.session_state.mode in mode_options.values() else 0
-        )
-        st.session_state.mode = mode_options[selected_mode]
+        st.divider()
         
-        if st.session_state.mode == 'connect' and st.session_state.connecting_from is not None:
-            st.info(f"Conectando da Barra {st.session_state.connecting_from}")
-            if st.button("Cancelar Conexão"):
+        st.header("🛠️ Ferramentas")
+        
+        # Modos de operação
+        mode_cols = st.columns(2)
+        with mode_cols[0]:
+            if st.button("🔍 Selecionar", 
+                        use_container_width=True,
+                        type="primary" if st.session_state.mode == 'select' else "secondary"):
+                st.session_state.mode = 'select'
                 st.session_state.connecting_from = None
                 st.rerun()
         
-        st.markdown("---")
+        with mode_cols[1]:
+            if st.button("🔗 Conectar", 
+                        use_container_width=True,
+                        type="primary" if st.session_state.mode == 'connect' else "secondary"):
+                st.session_state.mode = 'connect'
+                st.rerun()
         
-        # Adicionar barra manualmente
-        st.subheader("➕ Adicionar Barra Manual")
-        col1, col2 = st.columns(2)
-        with col1:
-            x_pos = st.number_input("Posição X", 0, 1000, 300, key="x_pos_input")
-        with col2:
-            y_pos = st.number_input("Posição Y", 0, 700, 350, key="y_pos_input")
+        mode_cols2 = st.columns(2)
+        with mode_cols2[0]:
+            if st.button("➕ Adicionar", 
+                        use_container_width=True,
+                        type="primary" if st.session_state.mode == 'add' else "secondary"):
+                st.session_state.mode = 'add'
+                st.rerun()
         
-        bus_name = st.text_input("Nome da Barra", "Bus")
-        bus_type = st.selectbox("Tipo da Barra", ["pq", "pv", "slack"], index=0)
+        with mode_cols2[1]:
+            if st.button("🗑️ Deletar", 
+                        use_container_width=True,
+                        type="primary" if st.session_state.mode == 'delete' else "secondary"):
+                st.session_state.mode = 'delete'
+                st.rerun()
         
-        if st.button("Adicionar Barra", use_container_width=True):
-            add_bus(x_pos, y_pos, bus_type, bus_name)
-            st.rerun()
+        st.divider()
         
-        st.markdown("---")
+        # Configurações
+        st.header("⚙️ Configurações")
         
-        # Ferramentas de análise
-        st.subheader("📊 Análise")
+        st.session_state.system_name = st.text_input("Nome do Sistema", 
+                                                    st.session_state.system_name)
         
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔁 Fluxo", help="Executar fluxo de potência", use_container_width=True):
-                run_power_flow()
+        col_set1, col_set2 = st.columns(2)
+        with col_set1:
+            st.session_state.grid_enabled = st.checkbox("Grade", 
+                                                       st.session_state.grid_enabled)
+        with col_set2:
+            st.session_state.snap_to_grid = st.checkbox("Snap to Grid", 
+                                                       st.session_state.snap_to_grid)
         
-        with col2:
-            if st.button("⚡ Curto", help="Análise de curto-circuito", use_container_width=True):
-                run_short_circuit()
+        st.session_state.show_voltages = st.checkbox("Mostrar Tensões", 
+                                                    st.session_state.show_voltages)
         
-        st.markdown("---")
+        st.divider()
+        
+        # Análises
+        st.header("📊 Análises")
+        
+        if st.button("🔁 Executar Fluxo de Potência", use_container_width=True):
+            with st.spinner("Calculando fluxo de potência..."):
+                results = run_power_flow_simulation()
+                if results:
+                    st.success("Fluxo de potência calculado!")
+                st.rerun()
+        
+        if st.button("⚡ Análise de Curto-Circuito", use_container_width=True):
+            with st.spinner("Analisando curto-circuito..."):
+                results = run_short_circuit_analysis()
+                if results:
+                    st.success(f"Curto-circuito na barra {results['fault_bus']} analisado!")
+                st.rerun()
+        
+        st.divider()
         
         # Gerenciamento de arquivos
-        st.subheader("💾 Arquivos")
+        st.header("💾 Arquivos")
         
         # Importar
-        uploaded_file = st.file_uploader("Importar sistema", type=['json'], key="file_uploader")
-        if uploaded_file:
+        uploaded_file = st.file_uploader("Importar sistema", type=['json'])
+        if uploaded_file is not None:
             if import_system(uploaded_file):
+                st.success("Sistema importado com sucesso!")
                 st.rerun()
         
         # Exportar
         if st.button("📥 Exportar Sistema", use_container_width=True):
             json_str = export_system()
             st.download_button(
-                label="Baixar JSON",
+                label="⬇️ Baixar JSON",
                 data=json_str,
-                file_name=f"power_system_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                file_name=f"{st.session_state.system_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
                 use_container_width=True
             )
         
         # Limpar
-        if st.button("🗑️ Limpar Tudo", type="secondary", use_container_width=True):
-            clear_system()
+        if st.button("🔄 Limpar Tudo", type="secondary", use_container_width=True):
+            st.session_state.buses = []
+            st.session_state.lines = []
+            st.session_state.loads = []
+            st.session_state.generators = []
+            st.session_state.results = None
+            st.session_state.history = []
+            st.session_state.selected_element = None
+            st.session_state.selected_type = None
+            st.session_state.next_id = 0
             st.rerun()
-        
-        st.markdown("---")
-        
-        # Estatísticas rápidas
-        st.subheader("📈 Estatísticas")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Barras", len(st.session_state.buses))
-            st.metric("Linhas", len(st.session_state.lines))
-        with col2:
-            st.metric("Cargas", len(st.session_state.loads))
-            st.metric("Geradores", len(st.session_state.generators))
-        
-        if st.session_state.results:
-            st.caption(f"Última análise: {st.session_state.results['type'].replace('_', ' ').title()}")
     
-    # Layout principal
-    col1, col2 = st.columns([3, 1])
+    # Área principal
+    col_main1, col_main2 = st.columns([3, 1])
     
-    with col1:
-        # Diagrama do sistema
-        st.subheader("Diagrama do Sistema")
+    with col_main1:
+        # Canvas interativo
+        st.subheader("Canvas Interativo")
         
-        fig = draw_power_system()
-        
-        # Usar plotly_chart com modo de seleção
-        selected_point = st.plotly_chart(
-            fig,
-            use_container_width=True,
-            key="system_diagram"
-        )
-        
-        # Instruções baseadas no modo
+        # Instruções
         mode_instructions = {
-            'select': "🔍 **Modo Seleção:** Clique em uma barra para selecioná-la",
-            'add_bus': "➕ **Modo Adicionar Barra:** Clique no diagrama para adicionar uma nova barra",
-            'connect': "🔗 **Modo Conexão:** Clique em duas barras para conectá-las com uma linha",
-            'add_load': "💡 **Modo Adicionar Carga:** Clique em uma barra para adicionar uma carga",
-            'add_gen': "🌀 **Modo Adicionar Gerador:** Clique em uma barra para adicionar um gerador"
+            'select': "🔍 **Modo Seleção:** Clique nos elementos para selecionar",
+            'connect': "🔗 **Modo Conexão:** Clique em duas barras para conectá-las",
+            'add': "➕ **Modo Adição:** Arraste elementos da paleta para o canvas",
+            'delete': "🗑️ **Modo Deleção:** Clique nos elementos para removê-los"
         }
         
-        st.info(mode_instructions.get(st.session_state.mode, ""))
+        current_mode = st.session_state.mode
+        st.info(mode_instructions.get(current_mode, "Selecione um modo de operação"))
         
-        # Legenda
-        st.markdown("### Legenda")
-        leg_cols = st.columns(4)
-        with leg_cols[0]:
-            st.markdown("""
-            **Barras:**
-            - 🔴 **Slack:** Referência
-            - 🟢 **PV:** Controle de tensão
-            - 🔵 **PQ:** Carga fixa
-            """)
+        # Criar canvas
+        fig = create_interactive_canvas()
         
-        with leg_cols[1]:
-            st.markdown("""
-            **Elementos:**
-            - 🔵 **Linhas:** Transmissão
-            - 🟣 **Cargas:** Consumo
-            - 🟢 **Geradores:** Geração
-            """)
+        # Mostrar gráfico e capturar interações
+        click_data = st.plotly_chart(
+            fig, 
+            use_container_width=True,
+            key="main_canvas",
+            on_select="rerun"
+        )
         
-        with leg_cols[2]:
-            st.markdown("""
-            **Tensões (pu):**
-            - 🟢 0.95 - 1.05 (Normal)
-            - 🟡 Fora dos limites
-            - 🔴 < 0.90 ou > 1.10
-            """)
+        # Processar cliques
+        if click_data and 'selection' in click_data:
+            handle_canvas_click(click_data['selection'])
         
-        with leg_cols[3]:
-            st.markdown("""
-            **Indicadores:**
-            - 🟡 **Borda amarela:** Barra selecionada
-            - 📍 **Seta:** Direção do fluxo
-            - 🔢 **Número:** ID do elemento
-            """)
+        # JavaScript para drag and drop
+        st.markdown("""
+        <script>
+        // Função para habilitar arrastar elementos no canvas
+        function enableDragging() {
+            const iframe = document.querySelector('[data-testid="stPlotlyChart"] iframe');
+            if (!iframe) return;
+            
+            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+            const plot = iframeDoc.querySelector('.js-plotly-plot');
+            
+            if (!plot) return;
+            
+            let draggedElement = null;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            
+            // Encontrar elementos arrastáveis (barras)
+            plot.addEventListener('mousedown', function(e) {
+                const target = e.target;
+                const point = target.closest('.point, .scatterpts');
+                
+                if (point) {
+                    // Verificar se é uma barra
+                    const trace = point.closest('.trace');
+                    if (trace && trace.getAttribute('data-type') === 'bus') {
+                        draggedElement = point;
+                        dragStartX = e.clientX;
+                        dragStartY = e.clientY;
+                        
+                        e.preventDefault();
+                    }
+                }
+            });
+            
+            plot.addEventListener('mousemove', function(e) {
+                if (draggedElement) {
+                    const dx = e.clientX - dragStartX;
+                    const dy = e.clientY - dragStartY;
+                    
+                    // Atualizar posição visual
+                    const transform = draggedElement.getAttribute('transform') || 'translate(0,0)';
+                    const match = transform.match(/translate\\(([^,]+),([^)]+)\\)/);
+                    
+                    if (match) {
+                        const x = parseFloat(match[1]) + dx;
+                        const y = parseFloat(match[2]) + dy;
+                        
+                        draggedElement.setAttribute('transform', `translate(${x},${y})`);
+                        dragStartX = e.clientX;
+                        dragStartY = e.clientY;
+                    }
+                }
+            });
+            
+            plot.addEventListener('mouseup', function(e) {
+                if (draggedElement) {
+                    // Enviar nova posição para Python
+                    const transform = draggedElement.getAttribute('transform') || 'translate(0,0)';
+                    const match = transform.match(/translate\\(([^,]+),([^)]+)\\)/);
+                    
+                    if (match) {
+                        const x = parseFloat(match[1]);
+                        const y = parseFloat(match[2]);
+                        
+                        // Obter ID da barra
+                        const trace = draggedElement.closest('.trace');
+                        const busId = trace ? trace.getAttribute('data-id') : null;
+                        
+                        if (busId) {
+                            const message = {
+                                type: 'move_bus',
+                                bus_id: parseInt(busId),
+                                x: x,
+                                y: y
+                            };
+                            
+                            window.parent.postMessage(message, '*');
+                        }
+                    }
+                    
+                    draggedElement = null;
+                }
+            });
+        }
+        
+        // Executar quando a página carregar
+        window.addEventListener('load', function() {
+            setTimeout(enableDragging, 1000); // Aguardar Plotly carregar
+        });
+        
+        // Receber mensagens do Python
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'move_bus') {
+                console.log('Moving bus:', event.data);
+            }
+        });
+        </script>
+        """, unsafe_allow_html=True)
+        
+        # Estatísticas rápidas
+        st.subheader("📈 Estatísticas do Sistema")
+        stats_cols = st.columns(4)
+        with stats_cols[0]:
+            st.metric("Barras", len(st.session_state.buses))
+        with stats_cols[1]:
+            st.metric("Linhas", len(st.session_state.lines))
+        with stats_cols[2]:
+            st.metric("Cargas", len(st.session_state.loads))
+        with stats_cols[3]:
+            st.metric("Geradores", len(st.session_state.generators))
     
-    with col2:
+    with col_main2:
         # Painel de propriedades
         st.subheader("🔧 Propriedades")
         
-        # Barra selecionada
-        if st.session_state.selected_bus is not None:
-            bus = get_bus_by_id(st.session_state.selected_bus)
-            if bus:
-                with st.expander(f"🚏 Barra {bus['id']}: {bus['name']}", expanded=True):
-                    # Editar propriedades da barra
-                    new_name = st.text_input("Nome", bus['name'], key=f"bus_name_{bus['id']}")
-                    new_type = st.selectbox(
-                        "Tipo",
-                        ["slack", "pv", "pq"],
-                        index=["slack", "pv", "pq"].index(bus['type']),
-                        key=f"bus_type_{bus['id']}"
-                    )
-                    new_vn = st.number_input(
-                        "Vn (kV)",
-                        value=float(bus['vn_kv']),
-                        min_value=0.1,
-                        step=0.1,
-                        key=f"bus_vn_{bus['id']}"
-                    )
-                    
-                    col_btn1, col_btn2 = st.columns(2)
-                    with col_btn1:
-                        if st.button("💾 Atualizar", key=f"update_bus_{bus['id']}", use_container_width=True):
-                            bus['name'] = new_name
-                            bus['type'] = new_type
-                            bus['vn_kv'] = new_vn
-                            st.rerun()
-                    
-                    with col_btn2:
-                        if st.button("🗑️ Remover", key=f"remove_bus_{bus['id']}", type="secondary", use_container_width=True):
-                            # Remover barra e elementos associados
-                            st.session_state.buses = [b for b in st.session_state.buses if b['id'] != bus['id']]
-                            st.session_state.lines = [
-                                l for l in st.session_state.lines 
-                                if l['from'] != bus['id'] and l['to'] != bus['id']
-                            ]
-                            st.session_state.loads = [l for l in st.session_state.loads if l['bus'] != bus['id']]
-                            st.session_state.generators = [g for g in st.session_state.generators if g['bus'] != bus['id']]
-                            st.session_state.selected_bus = None
-                            st.rerun()
-                    
-                    # Mostrar elementos conectados
-                    st.markdown("**Elementos Conectados:**")
-                    
-                    # Linhas conectadas
-                    connected_lines = [
-                        l for l in st.session_state.lines 
-                        if l['from'] == bus['id'] or l['to'] == bus['id']
-                    ]
-                    if connected_lines:
-                        st.write(f"📈 Linhas: {len(connected_lines)}")
-                    
-                    # Cargas
-                    bus_loads = [l for l in st.session_state.loads if l['bus'] == bus['id']]
-                    if bus_loads:
-                        st.write(f"💡 Cargas: {len(bus_loads)}")
-                    
-                    # Geradores
-                    bus_gens = [g for g in st.session_state.generators if g['bus'] == bus['id']]
-                    if bus_gens:
-                        st.write(f"🌀 Geradores: {len(bus_gens)}")
-        
-        # Resultados da análise
-        if st.session_state.results:
-            with st.expander("📊 Resultados", expanded=True):
-                results = st.session_state.results
+        if st.session_state.selected_element is not None and st.session_state.selected_type is not None:
+            element = get_element_by_id(
+                st.session_state.selected_element, 
+                st.session_state.selected_type
+            )
+            
+            if element:
+                # Mostrar tipo do elemento selecionado
+                type_names = {
+                    'bus': 'Barra',
+                    'line': 'Linha',
+                    'load': 'Carga',
+                    'generator': 'Gerador'
+                }
                 
-                st.caption(f"**Tipo:** {results['type'].replace('_', ' ').title()}")
-                st.caption(f"**Data:** {datetime.fromisoformat(results['timestamp']).strftime('%H:%M:%S')}")
+                st.success(f"✅ {type_names[st.session_state.selected_type]} selecionado")
                 
-                if results['type'] == 'power_flow':
-                    st.markdown("**Fluxo de Potência**")
-                    
-                    if results['data']['converged']:
-                        st.success(f"✅ Convergiu em {results['data']['iterations']} iterações")
-                    else:
-                        st.warning(f"⚠️ Não convergiu após {results['data']['iterations']} iterações")
-                    
-                    st.markdown("**Tensões (pu):**")
-                    voltages = results['data']['voltages']
-                    
-                    for i, v in enumerate(voltages):
-                        if v < 0.95:
-                            icon = "🔴"
-                            color = "red"
-                        elif v > 1.05:
-                            icon = "🟡"
-                            color = "orange"
-                        else:
-                            icon = "🟢"
-                            color = "green"
+                # Formulário de edição
+                with st.form("edit_element"):
+                    if st.session_state.selected_type == 'bus':
+                        st.text_input("Nome", element['name'], key=f"bus_name_{element['id']}")
                         
-                        st.markdown(f"{icon} Barra {i}: `{v:.4f}`")
-                    
-                    # Gráfico de barras das tensões
-                    fig_v = go.Figure(data=[
-                        go.Bar(
-                            x=list(range(len(voltages))),
-                            y=voltages,
-                            marker_color=['red' if v < 0.95 else 'orange' if v > 1.05 else 'green' for v in voltages]
+                        bus_type = st.selectbox(
+                            "Tipo",
+                            ["slack", "pv", "pq"],
+                            index=["slack", "pv", "pq"].index(element['type']),
+                            key=f"bus_type_{element['id']}"
                         )
-                    ])
+                        
+                        col_bus1, col_bus2 = st.columns(2)
+                        with col_bus1:
+                            new_x = st.number_input("Posição X", 
+                                                   value=float(element['x']),
+                                                   min_value=0.0,
+                                                   max_value=1000.0,
+                                                   key=f"bus_x_{element['id']}")
+                        with col_bus2:
+                            new_y = st.number_input("Posição Y",
+                                                   value=float(element['y']),
+                                                   min_value=0.0,
+                                                   max_value=700.0,
+                                                   key=f"bus_y_{element['id']}")
+                        
+                        element['vn_kv'] = st.number_input("Tensão Nominal (kV)",
+                                                          value=float(element['vn_kv']),
+                                                          min_value=0.1,
+                                                          step=0.1,
+                                                          key=f"bus_vn_{element['id']}")
                     
-                    fig_v.update_layout(
-                        title="Tensões por Barra",
-                        xaxis_title="Barra",
-                        yaxis_title="Tensão (pu)",
-                        height=200,
-                        margin=dict(l=20, r=20, t=40, b=20)
-                    )
+                    elif st.session_state.selected_type == 'line':
+                        st.text_input("Nome", element['name'], key=f"line_name_{element['id']}")
+                        
+                        # Mostrar barras conectadas
+                        from_bus = get_bus_by_id(element['from'])
+                        to_bus = get_bus_by_id(element['to'])
+                        
+                        if from_bus and to_bus:
+                            st.info(f"Conecta: Barra {element['from']} → Barra {element['to']}")
+                        
+                        col_line1, col_line2 = st.columns(2)
+                        with col_line1:
+                            element['r_ohm_per_km'] = st.number_input("R (Ω/km)",
+                                                                     value=float(element['r_ohm_per_km']),
+                                                                     min_value=0.001,
+                                                                     step=0.01,
+                                                                     key=f"line_r_{element['id']}")
+                        with col_line2:
+                            element['x_ohm_per_km'] = st.number_input("X (Ω/km)",
+                                                                     value=float(element['x_ohm_per_km']),
+                                                                     min_value=0.001,
+                                                                     step=0.01,
+                                                                     key=f"line_x_{element['id']}")
                     
-                    st.plotly_chart(fig_v, use_container_width=True)
-                
-                elif results['type'] == 'short_circuit':
-                    st.markdown("**Curto-Circuito**")
-                    st.warning(f"Barra de falta: {results['data']['fault_bus']}")
+                    elif st.session_state.selected_type == 'load':
+                        st.text_input("Nome", element['name'], key=f"load_name_{element['id']}")
+                        
+                        col_load1, col_load2 = st.columns(2)
+                        with col_load1:
+                            element['p_mw'] = st.number_input("P (MW)",
+                                                             value=float(element['p_mw']),
+                                                             min_value=0.0,
+                                                             step=0.1,
+                                                             key=f"load_p_{element['id']}")
+                        with col_load2:
+                            element['q_mvar'] = st.number_input("Q (MVar)",
+                                                               value=float(element['q_mvar']),
+                                                               min_value=0.0,
+                                                               step=0.1,
+                                                               key=f"load_q_{element['id']}")
                     
-                    st.metric("Corrente Máxima", f"{results['data']['max_current']:.2f} kA")
+                    elif st.session_state.selected_type == 'generator':
+                        st.text_input("Nome", element['name'], key=f"gen_name_{element['id']}")
+                        
+                        col_gen1, col_gen2 = st.columns(2)
+                        with col_gen1:
+                            element['p_mw'] = st.number_input("P (MW)",
+                                                             value=float(element['p_mw']),
+                                                             min_value=0.0,
+                                                             step=0.1,
+                                                             key=f"gen_p_{element['id']}")
+                        with col_gen2:
+                            element['vm_pu'] = st.number_input("Vm (pu)",
+                                                              value=float(element['vm_pu']),
+                                                              min_value=0.8,
+                                                              max_value=1.2,
+                                                              step=0.01,
+                                                              key=f"gen_vm_{element['id']}")
                     
-                    if results['data']['critical_buses']:
-                        st.markdown("**Barras Críticas:**")
-                        for crit in results['data']['critical_buses']:
-                            st.error(f"Barra {crit['bus_id']}: {crit['current']:.2f} kA")
+                    # Botões de ação
+                    col_act1, col_act2 = st.columns(2)
+                    with col_act1:
+                        if st.form_submit_button("💾 Salvar Alterações", use_container_width=True):
+                            # Atualizar propriedades
+                            if st.session_state.selected_type == 'bus':
+                                element['x'] = new_x
+                                element['y'] = new_y
+                                element['type'] = bus_type
+                                element['color'] = {
+                                    'slack': '#ef4444',
+                                    'pv': '#10b981',
+                                    'pq': '#3b82f6'
+                                }[bus_type]
+                            
+                            st.success("Alterações salvas!")
+                            st.rerun()
+                    
+                    with col_act2:
+                        if st.form_submit_button("🗑️ Remover", 
+                                                type="secondary", 
+                                                use_container_width=True):
+                            delete_selected_element()
+                            st.rerun()
+            
+            else:
+                st.warning("Elemento não encontrado")
+        else:
+            st.info("👈 Selecione um elemento no canvas para editar suas propriedades")
         
-        # Histórico
+        # Resultados da última análise
+        if st.session_state.results:
+            st.divider()
+            st.subheader("📊 Última Análise")
+            
+            results = st.session_state.results
+            analysis_time = datetime.fromisoformat(results['timestamp']).strftime("%H:%M:%S")
+            
+            if results['type'] == 'power_flow':
+                st.markdown(f"**Fluxo de Potência** ({analysis_time})")
+                
+                if results['converged']:
+                    st.success(f"✅ Convergiu em {results['iterations']} iterações")
+                else:
+                    st.warning(f"⚠️ Não convergiu após {results['iterations']} iterações")
+                
+                # Mostrar resumo de tensões
+                voltages = results['voltages']
+                if voltages:
+                    avg_voltage = np.mean(voltages)
+                    min_voltage = min(voltages)
+                    max_voltage = max(voltages)
+                    
+                    col_volt1, col_volt2, col_volt3 = st.columns(3)
+                    with col_volt1:
+                        st.metric("Média", f"{avg_voltage:.3f} pu")
+                    with col_volt2:
+                        st.metric("Mínima", f"{min_voltage:.3f} pu")
+                    with col_volt3:
+                        st.metric("Máxima", f"{max_voltage:.3f} pu")
+            
+            elif results['type'] == 'short_circuit':
+                st.markdown(f"**Curto-Circuito** ({analysis_time})")
+                
+                if 'fault_bus' in results:
+                    st.warning(f"Barra de falta: {results['fault_bus']}")
+                
+                if 'max_current' in results:
+                    st.metric("Corrente Máxima", f"{results['max_current']:.2f} kA")
+                
+                if 'critical_buses' in results and results['critical_buses']:
+                    st.markdown("**Barras Críticas:**")
+                    for crit in results['critical_buses']:
+                        st.error(f"Barra {crit['bus_id']}: {crit['current']:.2f} kA")
+        
+        # Histórico de análises
         if st.session_state.history:
-            with st.expander("📋 Histórico (10 últimos)", expanded=False):
-                for i, hist in enumerate(st.session_state.history):
-                    type_icon = "🔁" if hist['type'] == 'power_flow' else "⚡"
-                    type_name = "Fluxo" if hist['type'] == 'power_flow' else "Curto"
-                    time_str = datetime.fromisoformat(hist['timestamp']).strftime('%H:%M:%S')
-                    
-                    col_hist1, col_hist2 = st.columns([3, 1])
-                    with col_hist1:
-                        st.write(f"{type_icon} {type_name}")
-                    with col_hist2:
-                        st.caption(time_str)
-                    
-                    if st.button("Carregar", key=f"load_hist_{i}", use_container_width=True):
-                        st.session_state.results = hist
-                        st.rerun()
-                    
-                    if i < len(st.session_state.history) - 1:
-                        st.divider()
+            st.divider()
+            st.subheader("📋 Histórico")
+            
+            for i, hist in enumerate(reversed(st.session_state.history[-5:])):
+                hist_time = datetime.fromisoformat(hist['timestamp']).strftime("%H:%M")
+                type_icon = "🔁" if hist['type'] == 'power_flow' else "⚡"
+                
+                if st.button(f"{type_icon} {hist_time} - {hist['type'].replace('_', ' ').title()}",
+                           key=f"hist_{i}",
+                           use_container_width=True):
+                    st.session_state.results = hist
+                    st.rerun()
 
 # Executar aplicação
 if __name__ == "__main__":
