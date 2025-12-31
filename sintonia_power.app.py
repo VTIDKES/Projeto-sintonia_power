@@ -47,8 +47,8 @@ fig = go.Figure()
 
 # Linhas
 for idx, linha in st.session_state.linhas.iterrows():
-    b_from = st.session_state.barras[st.session_state.barras["name"]==linha["from"]].iloc[0]
-    b_to = st.session_state.barras[st.session_state.barras["name"]==linha["to"]].iloc[0]
+    b_from = st.session_state.barras[st.session_state.barras["name"] == linha["from"]].iloc[0]
+    b_to = st.session_state.barras[st.session_state.barras["name"] == linha["to"]].iloc[0]
     fig.add_trace(go.Scatter(
         x=[b_from.x, b_to.x],
         y=[b_from.y, b_to.y],
@@ -108,6 +108,7 @@ if st.button("Gerar rede Pandapower e calcular fluxo"):
 
     st.subheader("Carregamento das Linhas (%)")
     st.dataframe(net.res_line[["loading_percent"]])
+
 
 
 
