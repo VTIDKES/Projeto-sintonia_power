@@ -606,14 +606,50 @@ with st.sidebar:
                 x = st.number_input("Posição X", value=0.0, step=10.0)
             with col2:
                 y = st.number_input("Posição Y", value=0.0, step=10.0)
-            vn_kv = st.selectbox("Tensão Nominal (kV)", LibraryManager.get_standard_voltages())
-            bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"])
+            
+            # Tensão nominal com opção personalizada
+            standard_voltages = LibraryManager.get_standard_voltages()
+            voltage_options = ["Personalizado"] + [f"{v} kV" for v in standard_voltages]
+            selected_voltage = st.selectbox("Tensão Nominal", voltage_options, index=5)  # índice 5 = 138 kV
+            
+            if selected_voltage == "Personalizado":
+                col_v1, col_v2 = st.columns([1, 3])
+                with col_v1:
+                    vn_kv = st.number_input("kV", value=138.0, min_value=0.4, step=1.0)
+                with col_v2:
+                    st.markdown("<br><small>Digite o valor personalizado</small>", unsafe_allow_html=True)
+            else:
+                vn_kv = float(selected_voltage.replace(" kV", ""))
+                st.info(f"Tensão selecionada: {vn_kv} kV")
+            
+            bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"], 
+                                   help="Slack: Barra de referência\nPV: Barra de geração com controle de tensão\nPQ: Barra de carga")
+            
+            # Informações adicionais
+            with st.expander("🔧 Configurações avançadas"):
+                zone = st.text_input("Zona", value="Zona 1")
+                col_adv1, col_adv2 = st.columns(2)
+                with col_adv1:
+                    max_vm_pu = st.number_input("V máx (pu)", value=1.1, min_value=1.0, max_value=1.2, step=0.01)
+                with col_adv2:
+                    min_vm_pu = st.number_input("V mín (pu)", value=0.9, min_value=0.8, max_value=1.0, step=0.01)
+            
             if st.form_submit_button("➕ Adicionar Barra", use_container_width=True, type="primary"):
                 try:
                     if bus_id in st.session_state.ps_model.buses:
                         st.error(f"❌ ID '{bus_id}' já existe!")
                     else:
-                        st.session_state.ps_model.add_bus(BusNode(bus_id, bus_label, x, y, vn_kv, bus_type))
+                        # Criar barra com todas as informações
+                        bus = BusNode(
+                            id=bus_id, 
+                            label=bus_label, 
+                            x=x, 
+                            y=y, 
+                            vn_kv=vn_kv, 
+                            bus_type=bus_type,
+                            zone=zone if 'zone' in locals() else None
+                        )
+                        st.session_state.ps_model.add_bus(bus)
                         st.success(f"✅ Barra '{bus_label}' adicionada!")
                         st.rerun()
                 except Exception as e:
@@ -760,7 +796,7 @@ with st.sidebar:
             gen_to_remove = st.selectbox("Selecione", list(st.session_state.ps_model.generators.keys()))
             if st.button("🗑️ Remover Gerador", type="secondary"):
                 del st.session_state.ps_model.generators[gen_to_remove]
-                st.success("✅ Gerador removido")
+                st.success("✅ Gerador removida")
                 st.rerun()
         else:
             st.info("ℹ️ Nenhum elemento deste tipo para remover")
