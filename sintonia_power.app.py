@@ -423,31 +423,41 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
     fig = go.Figure()
     color_map = {"slack": "#dc3545", "pv": "#28a745", "pq": "#007bff"}
     
-    if results and results.get("success"):
+    if results and results.get("success") and results.get("buses"):
         bus_colors = []
         hover_texts = []
         for bus in model.buses.values():
-            vm_pu = results["buses"][bus.id]["vm_pu"]
-            va_deg = results["buses"][bus.id]["va_degree"]
-            if vm_pu < 0.95:
-                color = "#ffc107"
-            elif vm_pu > 1.05:
-                color = "#fd7e14"
+            # Verificar se a barra existe nos resultados
+            if bus.id in results["buses"]:
+                vm_pu = results["buses"][bus.id]["vm_pu"]
+                va_deg = results["buses"][bus.id]["va_degree"]
+                if vm_pu < 0.95:
+                    color = "#ffc107"
+                elif vm_pu > 1.05:
+                    color = "#fd7e14"
+                else:
+                    color = color_map.get(bus.bus_type, "#6c757d")
+                bus_colors.append(color)
+                hover_texts.append(f"<b>{bus.label}</b><br>Tensão: {vm_pu:.4f} pu ({bus.vn_kv * vm_pu:.2f} kV)<br>Ângulo: {va_deg:.2f}°<br>Tipo: {bus.bus_type.upper()}")
             else:
-                color = color_map.get(bus.bus_type, "#6c757d")
-            bus_colors.append(color)
-            hover_texts.append(f"<b>{bus.label}</b><br>Tensão: {vm_pu:.4f} pu ({bus.vn_kv * vm_pu:.2f} kV)<br>Ângulo: {va_deg:.2f}°<br>Tipo: {bus.bus_type.upper()}")
+                # Barra sem resultados (cor padrão)
+                bus_colors.append(color_map.get(bus.bus_type, "#6c757d"))
+                hover_texts.append(f"<b>{bus.label}</b><br>Tensão: {bus.vn_kv} kV<br>Tipo: {bus.bus_type.upper()}")
     else:
         bus_colors = [color_map.get(bus.bus_type, "#6c757d") for bus in model.buses.values()]
         hover_texts = [f"<b>{bus.label}</b><br>Tensão: {bus.vn_kv} kV<br>Tipo: {bus.bus_type.upper()}" for bus in model.buses.values()]
     
     for line in model.lines.values():
+        # Verificar se as barras existem
+        if line.source not in model.buses or line.target not in model.buses:
+            continue
+            
         bus_from = model.buses[line.source]
         bus_to = model.buses[line.target]
         line_color = "#6c757d"
         line_width = 3
         line_hover = f"{line.id}<br>{line.length_km} km"
-        if results and results.get("success") and line.id in results["lines"]:
+        if results and results.get("success") and results.get("lines") and line.id in results["lines"]:
             loading = results["lines"][line.id]["loading_percent"]
             line_hover = f"<b>{line.id}</b><br>Carga: {loading:.1f}%<br>P: {results['lines'][line.id]['p_from_mw']:.2f} MW"
             if loading > 100:
@@ -461,11 +471,15 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
                                 hovertext=line_hover, showlegend=False))
     
     for trafo in model.transformers.values():
+        # Verificar se as barras existem
+        if trafo.source not in model.buses or trafo.target not in model.buses:
+            continue
+            
         bus_from = model.buses[trafo.source]
         bus_to = model.buses[trafo.target]
         trafo_color = "#fd7e14"
         trafo_hover = f"<b>🔄 {trafo.id}</b><br>Transformador"
-        if results and results.get("success") and trafo.id in results["transformers"]:
+        if results and results.get("success") and results.get("transformers") and trafo.id in results["transformers"]:
             loading = results["transformers"][trafo.id]["loading_percent"]
             trafo_hover = f"<b>🔄 {trafo.id}</b><br>Carga: {loading:.1f}%"
             if loading > 100:
@@ -489,6 +503,10 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
         ))
     
     for load in model.loads.values():
+        # Verificar se a barra pai existe
+        if load.parent_bus not in model.buses:
+            continue
+            
         parent_bus = model.buses[load.parent_bus]
         fig.add_trace(go.Scatter(
             x=[parent_bus.x], y=[parent_bus.y - 15], mode="markers+text",
@@ -499,6 +517,10 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
         ))
     
     for gen in model.generators.values():
+        # Verificar se a barra pai existe
+        if gen.parent_bus not in model.buses:
+            continue
+            
         parent_bus = model.buses[gen.parent_bus]
         fig.add_trace(go.Scatter(
             x=[parent_bus.x], y=[parent_bus.y + 15], mode="markers+text",
