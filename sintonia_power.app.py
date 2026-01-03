@@ -1,303 +1,1082 @@
-# STREAMLIT + PANDAPOWER - Análise Completa
-# Sistemas Elétricos de Potência
+"""
+POWER SYSTEM STUDIO v3.0 - Sistema Completo
+Aplicação profissional para análise de sistemas elétricos de potência
+
+Salve este arquivo como: power_system_app.py
+Execute com: streamlit run power_system_app.py
+"""
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import pandapower as pp
+import json
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass, asdict
 
-st.set_page_config(page_title="Power System Studio", layout="wide")
+# ============================================================================
+# CONFIGURAÇÃO
+# ============================================================================
 
-# =========================
-# Estado inicial
-# =========================
-if "barras" not in st.session_state:
-    st.session_state.barras = pd.DataFrame(columns=["name", "x", "y", "tipo", "vn_kv"])
-if "linhas" not in st.session_state:
-    st.session_state.linhas = pd.DataFrame(columns=["from", "to", "length_km"])
-if "cargas" not in st.session_state:
-    st.session_state.cargas = pd.DataFrame(columns=["barra", "p_mw", "q_mvar"])
-if "geradores" not in st.session_state:
-    st.session_state.geradores = pd.DataFrame(columns=["barra", "p_mw", "vm_pu"])
+st.set_page_config(
+    page_title="Power System Studio v3.0",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# =========================
-# Cabeçalho
-# =========================
-st.title("⚡ Power System Studio v2.0")
-st.markdown("**Desenho Interativo de Redes Elétricas com Pandapower**")
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    .violation-warning {
+        background: #fff3cd;
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #ffc107;
+        margin: 0.5rem 0;
+    }
+    .violation-error {
+        background: #f8d7da;
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #dc3545;
+        margin: 0.5rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# =========================
-# Layout em colunas
-# =========================
-col1, col2 = st.columns([1, 2])
+# ============================================================================
+# MODELOS DE DADOS
+# ============================================================================
 
-with col1:
-    st.subheader("🔧 Ferramentas")
+@dataclass
+class BusNode:
+    id: str
+    label: str
+    x: float
+    y: float
+    vn_kv: float
+    bus_type: str
+    zone: Optional[str] = None
+    def to_dict(self):
+        return asdict(self)
+
+@dataclass
+class LoadNode:
+    id: str
+    label: str
+    parent_bus: str
+    p_mw: float
+    q_mvar: float
+    scaling: float = 1.0
+    def to_dict(self):
+        return asdict(self)
+
+@dataclass
+class GenNode:
+    id: str
+    label: str
+    parent_bus: str
+    p_mw: float
+    vm_pu: float
+    min_q_mvar: float = -50.0
+    max_q_mvar: float = 50.0
+    def to_dict(self):
+        return asdict(self)
+
+@dataclass
+class LineEdge:
+    id: str
+    source: str
+    target: str
+    length_km: float
+    std_type: str
+    parallel: int = 1
+    in_service: bool = True
+    def to_dict(self):
+        return asdict(self)
+
+@dataclass
+class TransformerEdge:
+    id: str
+    source: str
+    target: str
+    std_type: str
+    tap_pos: int = 0
+    in_service: bool = True
+    def to_dict(self):
+        return asdict(self)
+
+class PowerSystemModel:
+    def __init__(self):
+        self.metadata = {"version": "3.0", "created": datetime.now().isoformat(), "name": "Projeto Sem Título"}
+        self.buses: Dict[str, BusNode] = {}
+        self.loads: Dict[str, LoadNode] = {}
+        self.generators: Dict[str, GenNode] = {}
+        self.lines: Dict[str, LineEdge] = {}
+        self.transformers: Dict[str, TransformerEdge] = {}
     
-    # Tabs para organizar elementos
-    tab1, tab2, tab3, tab4 = st.tabs(["🔵 Barras", "➖ Linhas", "📊 Cargas", "⚙️ Geradores"])
+    def add_bus(self, bus: BusNode):
+        self.buses[bus.id] = bus
     
-    # TAB 1: Adicionar Barras
-    with tab1:
-        st.markdown("#### Adicionar Barra")
-        barra_name = st.text_input("Nome da Barra", key="barra_name")
-        tipo_barra = st.selectbox("Tipo", ["PQ", "PV", "Swing"], key="tipo_barra")
-        vn_kv = st.number_input("Tensão Nominal (kV)", value=110.0, min_value=0.1, key="vn_kv")
+    def add_load(self, load: LoadNode):
+        if load.parent_bus not in self.buses:
+            raise ValueError(f"Barra '{load.parent_bus}' não existe")
+        self.loads[load.id] = load
+    
+    def add_generator(self, gen: GenNode):
+        if gen.parent_bus not in self.buses:
+            raise ValueError(f"Barra '{gen.parent_bus}' não existe")
+        self.generators[gen.id] = gen
+    
+    def add_line(self, line: LineEdge):
+        if line.source not in self.buses or line.target not in self.buses:
+            raise ValueError("Barras de origem/destino não existem")
+        self.lines[line.id] = line
+    
+    def add_transformer(self, trafo: TransformerEdge):
+        if trafo.source not in self.buses or trafo.target not in self.buses:
+            raise ValueError("Barras de primário/secundário não existem")
+        self.transformers[trafo.id] = trafo
+    
+    def remove_bus(self, bus_id: str):
+        if bus_id in self.buses:
+            self.loads = {k: v for k, v in self.loads.items() if v.parent_bus != bus_id}
+            self.generators = {k: v for k, v in self.generators.items() if v.parent_bus != bus_id}
+            self.lines = {k: v for k, v in self.lines.items() if v.source != bus_id and v.target != bus_id}
+            self.transformers = {k: v for k, v in self.transformers.items() if v.source != bus_id and v.target != bus_id}
+            del self.buses[bus_id]
+    
+    def to_json(self) -> str:
+        return json.dumps({
+            "metadata": self.metadata,
+            "buses": [b.to_dict() for b in self.buses.values()],
+            "loads": [l.to_dict() for l in self.loads.values()],
+            "generators": [g.to_dict() for g in self.generators.values()],
+            "lines": [l.to_dict() for l in self.lines.values()],
+            "transformers": [t.to_dict() for t in self.transformers.values()]
+        }, indent=2)
+    
+    @staticmethod
+    def from_json(json_str: str) -> 'PowerSystemModel':
+        data = json.loads(json_str)
+        model = PowerSystemModel()
+        model.metadata = data.get("metadata", model.metadata)
+        for b in data.get("buses", []):
+            model.add_bus(BusNode(**b))
+        for l in data.get("loads", []):
+            model.add_load(LoadNode(**l))
+        for g in data.get("generators", []):
+            model.add_generator(GenNode(**g))
+        for ln in data.get("lines", []):
+            model.add_line(LineEdge(**ln))
+        for t in data.get("transformers", []):
+            model.add_transformer(TransformerEdge(**t))
+        return model
+
+# ============================================================================
+# VALIDAÇÃO E CONVERSÃO
+# ============================================================================
+
+class NetworkValidator:
+    @staticmethod
+    def validate(model: PowerSystemModel) -> Tuple[bool, List[str]]:
+        errors = []
+        warnings = []
         
-        col_x, col_y = st.columns(2)
-        with col_x:
-            x_coord = st.number_input("Posição X", value=0.0, key="x_coord")
-        with col_y:
-            y_coord = st.number_input("Posição Y", value=0.0, key="y_coord")
+        if len(model.buses) == 0:
+            errors.append("⚠️ Rede sem barras")
+            return False, errors
         
-        if st.button("➕ Adicionar Barra", use_container_width=True):
-            if barra_name.strip() != "":
-                new_barra = pd.DataFrame({
-                    "name": [barra_name],
-                    "x": [x_coord],
-                    "y": [y_coord],
-                    "tipo": [tipo_barra],
-                    "vn_kv": [vn_kv]
-                })
-                st.session_state.barras = pd.concat([st.session_state.barras, new_barra], ignore_index=True)
-                st.success(f"✅ Barra '{barra_name}' adicionada!")
-                st.rerun()
-            else:
-                st.error("❌ Nome da barra não pode ser vazio")
+        slack_buses = [b for b in model.buses.values() if b.bus_type == "slack"]
+        if len(slack_buses) == 0:
+            errors.append("⚠️ Rede sem barra slack")
+        elif len(slack_buses) > 1:
+            warnings.append(f"ℹ️ {len(slack_buses)} barras slack (usará primeira)")
+        
+        if not NetworkValidator._is_connected(model):
+            errors.append("⚠️ Rede possui ilhas elétricas")
+        
+        for line in model.lines.values():
+            bus_from = model.buses[line.source]
+            bus_to = model.buses[line.target]
+            if abs(bus_from.vn_kv - bus_to.vn_kv) > 0.1:
+                errors.append(f"⚠️ Linha '{line.id}' conecta tensões diferentes - use transformador")
+        
+        return len(errors) == 0, errors + warnings
     
-    # TAB 2: Conectar Linhas
-    with tab2:
-        st.markdown("#### Conectar Barras")
-        if len(st.session_state.barras) >= 2:
-            from_barra = st.selectbox("De", st.session_state.barras["name"], key="from_barra")
-            to_barra = st.selectbox("Para", st.session_state.barras["name"], key="to_barra")
-            length_km = st.number_input("Comprimento (km)", value=5.0, min_value=0.1, key="length_km")
-            
-            if st.button("➕ Adicionar Linha", use_container_width=True):
-                if from_barra != to_barra:
-                    new_linha = pd.DataFrame({
-                        "from": [from_barra],
-                        "to": [to_barra],
-                        "length_km": [length_km]
-                    })
-                    st.session_state.linhas = pd.concat([st.session_state.linhas, new_linha], ignore_index=True)
-                    st.success(f"✅ Linha {from_barra} → {to_barra} adicionada!")
-                    st.rerun()
-                else:
-                    st.error("❌ Barras devem ser diferentes")
-        else:
-            st.info("ℹ️ Adicione pelo menos 2 barras primeiro")
+    @staticmethod
+    def _is_connected(model: PowerSystemModel) -> bool:
+        if len(model.buses) == 0:
+            return True
+        graph = {bus_id: [] for bus_id in model.buses.keys()}
+        for line in model.lines.values():
+            if line.in_service:
+                graph[line.source].append(line.target)
+                graph[line.target].append(line.source)
+        for trafo in model.transformers.values():
+            if trafo.in_service:
+                graph[trafo.source].append(trafo.target)
+                graph[trafo.target].append(trafo.source)
+        visited = set()
+        start = next(iter(model.buses.keys()))
+        NetworkValidator._dfs(start, graph, visited)
+        return len(visited) == len(model.buses)
     
-    # TAB 3: Adicionar Cargas
-    with tab3:
-        st.markdown("#### Adicionar Carga")
-        if len(st.session_state.barras) > 0:
-            barra_carga = st.selectbox("Barra", st.session_state.barras["name"], key="barra_carga")
-            p_mw = st.number_input("Potência Ativa (MW)", value=10.0, key="p_mw")
-            q_mvar = st.number_input("Potência Reativa (MVAr)", value=5.0, key="q_mvar")
-            
-            if st.button("➕ Adicionar Carga", use_container_width=True):
-                new_carga = pd.DataFrame({
-                    "barra": [barra_carga],
-                    "p_mw": [p_mw],
-                    "q_mvar": [q_mvar]
-                })
-                st.session_state.cargas = pd.concat([st.session_state.cargas, new_carga], ignore_index=True)
-                st.success(f"✅ Carga adicionada na barra '{barra_carga}'")
-                st.rerun()
-        else:
-            st.info("ℹ️ Adicione barras primeiro")
-    
-    # TAB 4: Adicionar Geradores
-    with tab4:
-        st.markdown("#### Adicionar Gerador")
-        if len(st.session_state.barras) > 0:
-            barra_gen = st.selectbox("Barra", st.session_state.barras["name"], key="barra_gen")
-            p_mw_gen = st.number_input("Potência (MW)", value=50.0, key="p_mw_gen")
-            vm_pu = st.number_input("Tensão (pu)", value=1.02, min_value=0.9, max_value=1.1, key="vm_pu")
-            
-            if st.button("➕ Adicionar Gerador", use_container_width=True):
-                new_gen = pd.DataFrame({
-                    "barra": [barra_gen],
-                    "p_mw": [p_mw_gen],
-                    "vm_pu": [vm_pu]
-                })
-                st.session_state.geradores = pd.concat([st.session_state.geradores, new_gen], ignore_index=True)
-                st.success(f"✅ Gerador adicionado na barra '{barra_gen}'")
-                st.rerun()
-        else:
-            st.info("ℹ️ Adicione barras primeiro")
-    
-    # Botões de ação
-    st.markdown("---")
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("🗑️ Limpar Tudo", use_container_width=True):
-            st.session_state.barras = pd.DataFrame(columns=["name", "x", "y", "tipo", "vn_kv"])
-            st.session_state.linhas = pd.DataFrame(columns=["from", "to", "length_km"])
-            st.session_state.cargas = pd.DataFrame(columns=["barra", "p_mw", "q_mvar"])
-            st.session_state.geradores = pd.DataFrame(columns=["barra", "p_mw", "vm_pu"])
-            st.rerun()
-    
-    with col_btn2:
-        if st.button("⚡ Calcular Fluxo", use_container_width=True, type="primary"):
-            st.session_state.run_power_flow = True
+    @staticmethod
+    def _dfs(node: str, graph: Dict[str, List[str]], visited: set):
+        visited.add(node)
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                NetworkValidator._dfs(neighbor, graph, visited)
 
-# =========================
-# Coluna 2: Visualização
-# =========================
-with col2:
-    st.subheader("📊 Diagrama Unifilar")
+class PandapowerConverter:
+    @staticmethod
+    def to_pandapower(model: PowerSystemModel) -> Tuple[pp.pandapowerNet, Dict]:
+        net = pp.create_empty_network()
+        bus_map = {}
+        
+        for bus_id, bus in model.buses.items():
+            pp_idx = pp.create_bus(net, vn_kv=bus.vn_kv, name=bus.label, geodata=(bus.x, bus.y))
+            bus_map[bus_id] = pp_idx
+        
+        slack_created = False
+        for bus_id, bus in model.buses.items():
+            if bus.bus_type == "slack" and not slack_created:
+                pp.create_ext_grid(net, bus=bus_map[bus_id], vm_pu=1.0, name=f"Grid_{bus.label}")
+                slack_created = True
+                break
+        
+        if not slack_created and len(bus_map) > 0:
+            pp.create_ext_grid(net, bus=list(bus_map.values())[0], vm_pu=1.0, name="Grid_Auto")
+        
+        for line in model.lines.values():
+            try:
+                pp.create_line(net, from_bus=bus_map[line.source], to_bus=bus_map[line.target],
+                             length_km=line.length_km, std_type=line.std_type, name=line.id,
+                             parallel=line.parallel, in_service=line.in_service)
+            except Exception as e:
+                st.warning(f"Linha '{line.id}': {str(e)}")
+        
+        for trafo in model.transformers.values():
+            try:
+                pp.create_transformer(net, hv_bus=bus_map[trafo.source], lv_bus=bus_map[trafo.target],
+                                    std_type=trafo.std_type, name=trafo.id, tap_pos=trafo.tap_pos,
+                                    in_service=trafo.in_service)
+            except Exception as e:
+                st.warning(f"Trafo '{trafo.id}': {str(e)}")
+        
+        for load in model.loads.values():
+            pp.create_load(net, bus=bus_map[load.parent_bus], p_mw=load.p_mw, q_mvar=load.q_mvar,
+                         scaling=load.scaling, name=load.label)
+        
+        for gen in model.generators.values():
+            pp.create_gen(net, bus=bus_map[gen.parent_bus], p_mw=gen.p_mw, vm_pu=gen.vm_pu,
+                        min_q_mvar=gen.min_q_mvar, max_q_mvar=gen.max_q_mvar, name=gen.label)
+        
+        return net, bus_map
+
+# ============================================================================
+# MOTOR DE SIMULAÇÃO
+# ============================================================================
+
+class SimulationEngine:
+    @staticmethod
+    def run_power_flow(model: PowerSystemModel) -> Dict:
+        is_valid, errors = NetworkValidator.validate(model)
+        if not is_valid:
+            return {"success": False, "converged": False, "errors": errors}
+        
+        try:
+            net, bus_map = PandapowerConverter.to_pandapower(model)
+        except Exception as e:
+            return {"success": False, "converged": False, "errors": [f"Conversão: {str(e)}"]}
+        
+        try:
+            pp.runpp(net, algorithm='nr', calculate_voltage_angles=True)
+            converged = net.converged
+        except Exception as e:
+            return {"success": False, "converged": False, "errors": [f"Simulação: {str(e)}"]}
+        
+        if converged:
+            results = SimulationEngine._extract_results(net, model, bus_map)
+            results["success"] = True
+            results["converged"] = True
+            results["errors"] = []
+            return results
+        else:
+            return {"success": False, "converged": False, "errors": ["Não convergiu"]}
     
-    # Criar figura
+    @staticmethod
+    def run_short_circuit(model: PowerSystemModel, fault_bus_id: str) -> Dict:
+        try:
+            net, bus_map = PandapowerConverter.to_pandapower(model)
+            pp.runpp(net)
+            pp.shortcircuit.calc_sc(net, fault='3ph', case='max')
+            
+            fault_idx = bus_map[fault_bus_id]
+            ikss_ka = net.res_bus_sc.at[fault_idx, 'ikss_ka']
+            
+            all_buses_sc = {}
+            for bus_id, pp_idx in bus_map.items():
+                all_buses_sc[bus_id] = {
+                    "ikss_ka": float(net.res_bus_sc.at[pp_idx, 'ikss_ka']),
+                    "ip_ka": float(net.res_bus_sc.at[pp_idx, 'ip_ka']) if 'ip_ka' in net.res_bus_sc.columns else 0.0
+                }
+            
+            return {"success": True, "fault_bus": fault_bus_id, "ikss_ka": float(ikss_ka), "all_buses": all_buses_sc}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    @staticmethod
+    def _extract_results(net: pp.pandapowerNet, model: PowerSystemModel, bus_map: Dict) -> Dict:
+        reverse_bus_map = {v: k for k, v in bus_map.items()}
+        results = {"buses": {}, "lines": {}, "transformers": {}, "loads": {}, "generators": {}, "violations": []}
+        
+        for pp_idx, bus_id in reverse_bus_map.items():
+            vm_pu = net.res_bus.at[pp_idx, 'vm_pu']
+            va_deg = net.res_bus.at[pp_idx, 'va_degree']
+            
+            results["buses"][bus_id] = {
+                "vm_pu": float(vm_pu),
+                "va_degree": float(va_deg),
+                "p_mw": float(net.res_bus.at[pp_idx, 'p_mw']),
+                "q_mvar": float(net.res_bus.at[pp_idx, 'q_mvar'])
+            }
+            
+            bus_label = model.buses[bus_id].label
+            if vm_pu < 0.95:
+                results["violations"].append({
+                    "type": "subtensão", "severity": "error" if vm_pu < 0.9 else "warning",
+                    "element": bus_label, "value": float(vm_pu), "limit": 0.95
+                })
+            elif vm_pu > 1.05:
+                results["violations"].append({
+                    "type": "sobretensão", "severity": "error" if vm_pu > 1.1 else "warning",
+                    "element": bus_label, "value": float(vm_pu), "limit": 1.05
+                })
+        
+        for pp_idx in net.line.index:
+            line_name = net.line.at[pp_idx, 'name']
+            loading = net.res_line.at[pp_idx, 'loading_percent']
+            results["lines"][line_name] = {
+                "loading_percent": float(loading),
+                "p_from_mw": float(net.res_line.at[pp_idx, 'p_from_mw']),
+                "q_from_mvar": float(net.res_line.at[pp_idx, 'q_from_mvar']),
+                "i_ka": float(net.res_line.at[pp_idx, 'i_ka'])
+            }
+            if loading > 100:
+                results["violations"].append({
+                    "type": "sobrecarga_linha", "severity": "error" if loading > 120 else "warning",
+                    "element": line_name, "value": float(loading), "limit": 100
+                })
+        
+        for pp_idx in net.trafo.index:
+            trafo_name = net.trafo.at[pp_idx, 'name']
+            loading = net.res_trafo.at[pp_idx, 'loading_percent']
+            results["transformers"][trafo_name] = {
+                "loading_percent": float(loading),
+                "p_hv_mw": float(net.res_trafo.at[pp_idx, 'p_hv_mw']),
+                "q_hv_mvar": float(net.res_trafo.at[pp_idx, 'q_hv_mvar'])
+            }
+            if loading > 100:
+                results["violations"].append({
+                    "type": "sobrecarga_trafo", "severity": "error" if loading > 120 else "warning",
+                    "element": trafo_name, "value": float(loading), "limit": 100
+                })
+        
+        return results
+
+# ============================================================================
+# BIBLIOTECA
+# ============================================================================
+
+class LibraryManager:
+    @staticmethod
+    def get_line_types() -> List[str]:
+        return ["NAYY 4x50 SE", "NAYY 4x120 SE", "NAYY 4x150 SE", "NA2XS2Y 1x95 RM/25 12/20 kV",
+                "NA2XS2Y 1x185 RM/25 12/20 kV", "NA2XS2Y 1x240 RM/25 12/20 kV",
+                "15-AL1/3-ST1A 0.4", "24-AL1/4-ST1A 0.4", "48-AL1/8-ST1A 10.0",
+                "94-AL1/15-ST1A 10.0", "149-AL1/24-ST1A 10.0", "184-AL1/30-ST1A 10.0"]
+    
+    @staticmethod
+    def get_transformer_types() -> List[str]:
+        return ["0.25 MVA 20/0.4 kV", "0.4 MVA 20/0.4 kV", "0.63 MVA 20/0.4 kV",
+                "25 MVA 110/20 kV", "40 MVA 110/20 kV", "63 MVA 110/20 kV", "100 MVA 220/110 kV"]
+    
+    @staticmethod
+    def get_standard_voltages() -> List[float]:
+        return [0.4, 13.8, 34.5, 69.0, 88.0, 138.0, 230.0, 345.0, 500.0]
+
+# ============================================================================
+# VISUALIZAÇÃO
+# ============================================================================
+
+def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = None):
     fig = go.Figure()
+    color_map = {"slack": "#dc3545", "pv": "#28a745", "pq": "#007bff"}
     
-    # Desenhar linhas
-    for idx, linha in st.session_state.linhas.iterrows():
-        b_from = st.session_state.barras[st.session_state.barras["name"] == linha["from"]]
-        b_to = st.session_state.barras[st.session_state.barras["name"] == linha["to"]]
-        
-        if not b_from.empty and not b_to.empty:
-            fig.add_trace(go.Scatter(
-                x=[b_from.iloc[0]["x"], b_to.iloc[0]["x"]],
-                y=[b_from.iloc[0]["y"], b_to.iloc[0]["y"]],
-                mode="lines",
-                line=dict(color="gray", width=3),
-                hoverinfo="text",
-                hovertext=f"Linha: {linha['from']} → {linha['to']}<br>Comprimento: {linha['length_km']} km",
-                showlegend=False
-            ))
+    if results and results.get("success"):
+        bus_colors = []
+        hover_texts = []
+        for bus in model.buses.values():
+            vm_pu = results["buses"][bus.id]["vm_pu"]
+            va_deg = results["buses"][bus.id]["va_degree"]
+            if vm_pu < 0.95:
+                color = "#ffc107"
+            elif vm_pu > 1.05:
+                color = "#fd7e14"
+            else:
+                color = color_map.get(bus.bus_type, "#6c757d")
+            bus_colors.append(color)
+            hover_texts.append(f"<b>{bus.label}</b><br>Tensão: {vm_pu:.4f} pu ({bus.vn_kv * vm_pu:.2f} kV)<br>Ângulo: {va_deg:.2f}°<br>Tipo: {bus.bus_type.upper()}")
+    else:
+        bus_colors = [color_map.get(bus.bus_type, "#6c757d") for bus in model.buses.values()]
+        hover_texts = [f"<b>{bus.label}</b><br>Tensão: {bus.vn_kv} kV<br>Tipo: {bus.bus_type.upper()}" for bus in model.buses.values()]
     
-    # Desenhar barras
-    if not st.session_state.barras.empty:
-        cores = {"PQ": "blue", "PV": "green", "Swing": "red"}
-        
+    for line in model.lines.values():
+        bus_from = model.buses[line.source]
+        bus_to = model.buses[line.target]
+        line_color = "#6c757d"
+        line_width = 3
+        line_hover = f"{line.id}<br>{line.length_km} km"
+        if results and results.get("success") and line.id in results["lines"]:
+            loading = results["lines"][line.id]["loading_percent"]
+            line_hover = f"<b>{line.id}</b><br>Carga: {loading:.1f}%<br>P: {results['lines'][line.id]['p_from_mw']:.2f} MW"
+            if loading > 100:
+                line_color = "#dc3545"
+                line_width = 5
+            elif loading > 80:
+                line_color = "#ffc107"
+                line_width = 4
+        fig.add_trace(go.Scatter(x=[bus_from.x, bus_to.x], y=[bus_from.y, bus_to.y], mode="lines",
+                                line=dict(color=line_color, width=line_width), hoverinfo="text",
+                                hovertext=line_hover, showlegend=False))
+    
+    for trafo in model.transformers.values():
+        bus_from = model.buses[trafo.source]
+        bus_to = model.buses[trafo.target]
+        trafo_color = "#fd7e14"
+        trafo_hover = f"<b>🔄 {trafo.id}</b><br>Transformador"
+        if results and results.get("success") and trafo.id in results["transformers"]:
+            loading = results["transformers"][trafo.id]["loading_percent"]
+            trafo_hover = f"<b>🔄 {trafo.id}</b><br>Carga: {loading:.1f}%"
+            if loading > 100:
+                trafo_color = "#dc3545"
+        fig.add_trace(go.Scatter(x=[bus_from.x, bus_to.x], y=[bus_from.y, bus_to.y], mode="lines",
+                                line=dict(color=trafo_color, width=4, dash="dash"), hoverinfo="text",
+                                hovertext=trafo_hover, showlegend=False))
+    
+    if len(model.buses) > 0:
         fig.add_trace(go.Scatter(
-            x=st.session_state.barras["x"],
-            y=st.session_state.barras["y"],
+            x=[bus.x for bus in model.buses.values()],
+            y=[bus.y for bus in model.buses.values()],
             mode="markers+text",
-            marker=dict(
-                size=25, 
-                color=[cores.get(t, "blue") for t in st.session_state.barras["tipo"]],
-                line=dict(width=2, color="white")
-            ),
-            text=st.session_state.barras["name"],
+            marker=dict(size=30, color=bus_colors, line=dict(width=3, color="white"), symbol="circle"),
+            text=[bus.label for bus in model.buses.values()],
             textposition="top center",
-            textfont=dict(size=12, color="black"),
+            textfont=dict(size=11, color="black", family="Arial Black"),
             hoverinfo="text",
-            hovertext=[f"Barra: {row['name']}<br>Tipo: {row['tipo']}<br>Tensão: {row['vn_kv']} kV" 
-                      for _, row in st.session_state.barras.iterrows()],
+            hovertext=hover_texts,
             showlegend=False
         ))
     
-    # Atualizar layout
+    for load in model.loads.values():
+        parent_bus = model.buses[load.parent_bus]
+        fig.add_trace(go.Scatter(
+            x=[parent_bus.x], y=[parent_bus.y - 15], mode="markers+text",
+            marker=dict(size=20, color="#ffc107", symbol="triangle-down", line=dict(width=2, color="white")),
+            text=["⚡"], textfont=dict(size=14), hoverinfo="text",
+            hovertext=f"<b>📊 {load.label}</b><br>P: {load.p_mw} MW<br>Q: {load.q_mvar} MVAr",
+            showlegend=False
+        ))
+    
+    for gen in model.generators.values():
+        parent_bus = model.buses[gen.parent_bus]
+        fig.add_trace(go.Scatter(
+            x=[parent_bus.x], y=[parent_bus.y + 15], mode="markers+text",
+            marker=dict(size=20, color="#28a745", symbol="square", line=dict(width=2, color="white")),
+            text=["🔋"], textfont=dict(size=14), hoverinfo="text",
+            hovertext=f"<b>⚙️ {gen.label}</b><br>P: {gen.p_mw} MW<br>V: {gen.vm_pu} pu",
+            showlegend=False
+        ))
+    
     fig.update_layout(
         height=600,
-        xaxis=dict(title="X (m)", showgrid=True, zeroline=True),
-        yaxis=dict(title="Y (m)", showgrid=True, zeroline=True),
-        hovermode='closest',
-        plot_bgcolor='#f0f2f6',
-        dragmode='pan'
+        xaxis=dict(title="Posição X (m)", showgrid=True, zeroline=True, gridcolor="#e0e0e0"),
+        yaxis=dict(title="Posição Y (m)", showgrid=True, zeroline=True, gridcolor="#e0e0e0", scaleanchor="x", scaleratio=1),
+        hovermode='closest', plot_bgcolor='#f8f9fa', paper_bgcolor='white',
+        dragmode='pan', margin=dict(l=50, r=50, t=30, b=50)
     )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Tabelas de elementos
-    with st.expander("📋 Elementos da Rede", expanded=False):
-        tab_b, tab_l, tab_c, tab_g = st.tabs(["Barras", "Linhas", "Cargas", "Geradores"])
-        
-        with tab_b:
-            st.dataframe(st.session_state.barras, use_container_width=True)
-        with tab_l:
-            st.dataframe(st.session_state.linhas, use_container_width=True)
-        with tab_c:
-            st.dataframe(st.session_state.cargas, use_container_width=True)
-        with tab_g:
-            st.dataframe(st.session_state.geradores, use_container_width=True)
+    return fig
 
-# =========================
-# Cálculo de Fluxo de Potência
-# =========================
-if st.session_state.get("run_power_flow", False):
-    st.session_state.run_power_flow = False
-    
-    if len(st.session_state.barras) == 0:
-        st.error("❌ Adicione barras antes de calcular o fluxo!")
-    else:
-        try:
-            with st.spinner("⚡ Calculando fluxo de potência..."):
-                # Criar rede Pandapower
-                net = pp.create_empty_network()
-                barra_map = {}
-                
-                # Adicionar barras
-                for idx, row in st.session_state.barras.iterrows():
-                    barra_map[row["name"]] = pp.create_bus(
-                        net, 
-                        vn_kv=row["vn_kv"], 
-                        name=row["name"]
-                    )
-                
-                # Adicionar ext_grid na primeira barra Swing
-                swing_barras = st.session_state.barras[st.session_state.barras["tipo"] == "Swing"]
-                if len(swing_barras) > 0:
-                    swing_bus = barra_map[swing_barras.iloc[0]["name"]]
-                    pp.create_ext_grid(net, bus=swing_bus, vm_pu=1.02, name="Subestação")
-                elif len(barra_map) > 0:
-                    # Se não há Swing, usar primeira barra
-                    first_bus = list(barra_map.values())[0]
-                    pp.create_ext_grid(net, bus=first_bus, vm_pu=1.02, name="Subestação")
-                
-                # Adicionar linhas
-                for idx, row in st.session_state.linhas.iterrows():
-                    pp.create_line(
-                        net, 
-                        barra_map[row["from"]], 
-                        barra_map[row["to"]], 
-                        length_km=row["length_km"], 
-                        std_type="NAYY 4x50 SE"
-                    )
-                
-                # Adicionar cargas
-                for idx, row in st.session_state.cargas.iterrows():
-                    pp.create_load(
-                        net,
-                        bus=barra_map[row["barra"]],
-                        p_mw=row["p_mw"],
-                        q_mvar=row["q_mvar"],
-                        name=f"Carga_{row['barra']}"
-                    )
-                
-                # Adicionar geradores
-                for idx, row in st.session_state.geradores.iterrows():
-                    pp.create_gen(
-                        net,
-                        bus=barra_map[row["barra"]],
-                        p_mw=row["p_mw"],
-                        vm_pu=row["vm_pu"],
-                        name=f"Gerador_{row['barra']}"
-                    )
-                
-                # Executar fluxo de carga
-                pp.runpp(net)
-                
-                st.success("✅ Fluxo de carga calculado com sucesso!")
-                
-                # Mostrar resultados
-                col_res1, col_res2 = st.columns(2)
-                
-                with col_res1:
-                    st.subheader("📊 Tensões nas Barras")
-                    res_bus = net.res_bus[["vm_pu", "va_degree"]].copy()
-                    res_bus["nome"] = [net.bus.at[i, "name"] for i in res_bus.index]
-                    st.dataframe(res_bus[["nome", "vm_pu", "va_degree"]], use_container_width=True)
-                
-                with col_res2:
-                    st.subheader("⚡ Carregamento das Linhas")
-                    st.dataframe(net.res_line[["loading_percent", "p_from_mw", "q_from_mvar"]], use_container_width=True)
-                
-        except Exception as e:
-            st.error(f"❌ Erro no cálculo: {str(e)}")
+def display_violations(violations: List[Dict]):
+    if not violations:
+        st.success("✅ Nenhuma violação detectada!")
+        return
+    st.error(f"⚠️ {len(violations)} violação(ões) detectada(s)")
+    for v in violations:
+        severity = v.get("severity", "warning")
+        css_class = "violation-error" if severity == "error" else "violation-warning"
+        icon = "🔴" if severity == "error" else "⚠️"
+        st.markdown(f"""<div class="{css_class}">
+            {icon} <b>{v['type'].upper()}</b> em <b>{v['element']}</b><br>
+            Valor: {v['value']:.4f} | Limite: {v['limit']:.4f}
+        </div>""", unsafe_allow_html=True)
 
-# Rodapé
+# ============================================================================
+# INICIALIZAÇÃO
+# ============================================================================
+
+def init_session_state():
+    if "ps_model" not in st.session_state:
+        st.session_state.ps_model = PowerSystemModel()
+    if "simulation_results" not in st.session_state:
+        st.session_state.simulation_results = None
+    if "show_validation" not in st.session_state:
+        st.session_state.show_validation = False
+
+init_session_state()
+
+# ============================================================================
+# INTERFACE PRINCIPAL
+# ============================================================================
+
+st.markdown('<h1 class="main-header">⚡ Power System Studio v3.0</h1>', unsafe_allow_html=True)
+st.markdown("**Plataforma Profissional para Análise de Sistemas Elétricos de Potência**")
+
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+with col_m1:
+    st.metric("Barras", len(st.session_state.ps_model.buses))
+with col_m2:
+    st.metric("Linhas", len(st.session_state.ps_model.lines) + len(st.session_state.ps_model.transformers))
+with col_m3:
+    st.metric("Cargas", len(st.session_state.ps_model.loads))
+with col_m4:
+    st.metric("Geradores", len(st.session_state.ps_model.generators))
+
 st.markdown("---")
-st.caption("Power System Studio v2.0 | Desenvolvido com Streamlit, Plotly e Pandapower | ⚡ Análise de Sistemas Elétricos de Potência")
+
+# ============================================================================
+# SIDEBAR
+# ============================================================================
+
+with st.sidebar:
+    st.header("🔧 Ferramentas de Edição")
+    tool = st.radio("Selecione o elemento:", ["🔵 Barra", "➖ Linha", "🔄 Transformador", "📊 Carga", "⚙️ Gerador", "🗑️ Remover"], key="tool_selector")
+    st.markdown("---")
+    
+    # ADICIONAR BARRA
+    if "Barra" in tool:
+        with st.form("add_bus", clear_on_submit=True):
+            st.subheader("➕ Adicionar Barra")
+            bus_id = st.text_input("ID único", value=f"bus_{len(st.session_state.ps_model.buses)+1}")
+            bus_label = st.text_input("Nome", value="Nova Barra")
+            col1, col2 = st.columns(2)
+            with col1:
+                x = st.number_input("Posição X", value=0.0, step=10.0)
+            with col2:
+                y = st.number_input("Posição Y", value=0.0, step=10.0)
+            vn_kv = st.selectbox("Tensão Nominal (kV)", LibraryManager.get_standard_voltages())
+            bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"])
+            if st.form_submit_button("➕ Adicionar Barra", use_container_width=True, type="primary"):
+                try:
+                    if bus_id in st.session_state.ps_model.buses:
+                        st.error(f"❌ ID '{bus_id}' já existe!")
+                    else:
+                        st.session_state.ps_model.add_bus(BusNode(bus_id, bus_label, x, y, vn_kv, bus_type))
+                        st.success(f"✅ Barra '{bus_label}' adicionada!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ {str(e)}")
+    
+    # ADICIONAR LINHA
+    elif "Linha" in tool:
+        with st.form("add_line", clear_on_submit=True):
+            st.subheader("➕ Adicionar Linha")
+            if len(st.session_state.ps_model.buses) >= 2:
+                bus_ids = list(st.session_state.ps_model.buses.keys())
+                bus_labels = {bid: st.session_state.ps_model.buses[bid].label for bid in bus_ids}
+                line_id = st.text_input("ID", value=f"line_{len(st.session_state.ps_model.lines)+1}")
+                source = st.selectbox("De (origem)", bus_ids, format_func=lambda x: f"{x} ({bus_labels[x]})")
+                target = st.selectbox("Para (destino)", bus_ids, format_func=lambda x: f"{x} ({bus_labels[x]})")
+                length_km = st.number_input("Comprimento (km)", value=10.0, min_value=0.1, step=1.0)
+                std_type = st.selectbox("Tipo de Condutor", LibraryManager.get_line_types())
+                parallel = st.number_input("Circuitos em Paralelo", value=1, min_value=1, max_value=4)
+                if st.form_submit_button("➕ Adicionar Linha", use_container_width=True, type="primary"):
+                    try:
+                        if source == target:
+                            st.error("❌ Origem e destino devem ser diferentes!")
+                        else:
+                            st.session_state.ps_model.add_line(LineEdge(line_id, source, target, length_km, std_type, parallel))
+                            st.success(f"✅ Linha adicionada!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {str(e)}")
+            else:
+                st.info("ℹ️ Adicione pelo menos 2 barras primeiro")
+                st.form_submit_button("➕ Adicionar", disabled=True)
+    
+    # ADICIONAR TRANSFORMADOR
+    elif "Transformador" in tool:
+        with st.form("add_trafo", clear_on_submit=True):
+            st.subheader("➕ Adicionar Transformador")
+            if len(st.session_state.ps_model.buses) >= 2:
+                bus_ids = list(st.session_state.ps_model.buses.keys())
+                bus_labels = {bid: st.session_state.ps_model.buses[bid].label for bid in bus_ids}
+                trafo_id = st.text_input("ID", value=f"trafo_{len(st.session_state.ps_model.transformers)+1}")
+                source = st.selectbox("Primário (alta tensão)", bus_ids, format_func=lambda x: f"{x} ({bus_labels[x]})")
+                target = st.selectbox("Secundário (baixa tensão)", bus_ids, format_func=lambda x: f"{x} ({bus_labels[x]})")
+                std_type = st.selectbox("Tipo", LibraryManager.get_transformer_types())
+                tap_pos = st.slider("Posição do Tap", -10, 10, 0)
+                if st.form_submit_button("➕ Adicionar Transformador", use_container_width=True, type="primary"):
+                    try:
+                        if source == target:
+                            st.error("❌ Primário e secundário devem ser diferentes!")
+                        else:
+                            st.session_state.ps_model.add_transformer(TransformerEdge(trafo_id, source, target, std_type, tap_pos))
+                            st.success(f"✅ Transformador adicionado!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {str(e)}")
+            else:
+                st.info("ℹ️ Adicione pelo menos 2 barras primeiro")
+                st.form_submit_button("➕ Adicionar", disabled=True)
+    
+    # ADICIONAR CARGA
+    elif "Carga" in tool:
+        with st.form("add_load", clear_on_submit=True):
+            st.subheader("➕ Adicionar Carga")
+            if len(st.session_state.ps_model.buses) > 0:
+                bus_ids = list(st.session_state.ps_model.buses.keys())
+                bus_labels = {bid: st.session_state.ps_model.buses[bid].label for bid in bus_ids}
+                load_id = st.text_input("ID", value=f"load_{len(st.session_state.ps_model.loads)+1}")
+                load_label = st.text_input("Nome", value="Nova Carga")
+                parent_bus = st.selectbox("Barra", bus_ids, format_func=lambda x: f"{x} ({bus_labels[x]})")
+                col1, col2 = st.columns(2)
+                with col1:
+                    p_mw = st.number_input("P (MW)", value=10.0, min_value=0.0, step=1.0)
+                with col2:
+                    q_mvar = st.number_input("Q (MVAr)", value=5.0, step=1.0)
+                scaling = st.slider("Fator de Escala", 0.0, 2.0, 1.0, 0.1)
+                if st.form_submit_button("➕ Adicionar Carga", use_container_width=True, type="primary"):
+                    try:
+                        st.session_state.ps_model.add_load(LoadNode(load_id, load_label, parent_bus, p_mw, q_mvar, scaling))
+                        st.success(f"✅ Carga '{load_label}' adicionada!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {str(e)}")
+            else:
+                st.info("ℹ️ Adicione barras primeiro")
+                st.form_submit_button("➕ Adicionar", disabled=True)
+    
+    # ADICIONAR GERADOR
+    elif "Gerador" in tool:
+        with st.form("add_gen", clear_on_submit=True):
+            st.subheader("➕ Adicionar Gerador")
+            if len(st.session_state.ps_model.buses) > 0:
+                bus_ids = list(st.session_state.ps_model.buses.keys())
+                bus_labels = {bid: st.session_state.ps_model.buses[bid].label for bid in bus_ids}
+                gen_id = st.text_input("ID", value=f"gen_{len(st.session_state.ps_model.generators)+1}")
+                gen_label = st.text_input("Nome", value="Novo Gerador")
+                parent_bus = st.selectbox("Barra", bus_ids, format_func=lambda x: f"{x} ({bus_labels[x]})")
+                p_mw = st.number_input("Potência (MW)", value=50.0, min_value=0.0, step=5.0)
+                vm_pu = st.number_input("Tensão (pu)", value=1.02, min_value=0.9, max_value=1.1, step=0.01)
+                col1, col2 = st.columns(2)
+                with col1:
+                    min_q = st.number_input("Q mín (MVAr)", value=-50.0, step=10.0)
+                with col2:
+                    max_q = st.number_input("Q máx (MVAr)", value=50.0, step=10.0)
+                if st.form_submit_button("➕ Adicionar Gerador", use_container_width=True, type="primary"):
+                    try:
+                        st.session_state.ps_model.add_generator(GenNode(gen_id, gen_label, parent_bus, p_mw, vm_pu, min_q, max_q))
+                        st.success(f"✅ Gerador '{gen_label}' adicionado!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {str(e)}")
+            else:
+                st.info("ℹ️ Adicione barras primeiro")
+                st.form_submit_button("➕ Adicionar", disabled=True)
+    
+    # REMOVER ELEMENTOS
+    elif "Remover" in tool:
+        st.subheader("🗑️ Remover Elementos")
+        remove_type = st.selectbox("Tipo", ["Barra", "Linha", "Transformador", "Carga", "Gerador"])
+        
+        if remove_type == "Barra" and st.session_state.ps_model.buses:
+            bus_to_remove = st.selectbox("Selecione a barra", list(st.session_state.ps_model.buses.keys()))
+            if st.button("🗑️ Remover Barra", type="secondary"):
+                st.session_state.ps_model.remove_bus(bus_to_remove)
+                st.success("✅ Barra removida (e elementos dependentes)")
+                st.rerun()
+        elif remove_type == "Linha" and st.session_state.ps_model.lines:
+            line_to_remove = st.selectbox("Selecione a linha", list(st.session_state.ps_model.lines.keys()))
+            if st.button("🗑️ Remover Linha", type="secondary"):
+                del st.session_state.ps_model.lines[line_to_remove]
+                st.success("✅ Linha removida")
+                st.rerun()
+        elif remove_type == "Transformador" and st.session_state.ps_model.transformers:
+            trafo_to_remove = st.selectbox("Selecione", list(st.session_state.ps_model.transformers.keys()))
+            if st.button("🗑️ Remover Transformador", type="secondary"):
+                del st.session_state.ps_model.transformers[trafo_to_remove]
+                st.success("✅ Transformador removido")
+                st.rerun()
+        elif remove_type == "Carga" and st.session_state.ps_model.loads:
+            load_to_remove = st.selectbox("Selecione", list(st.session_state.ps_model.loads.keys()))
+            if st.button("🗑️ Remover Carga", type="secondary"):
+                del st.session_state.ps_model.loads[load_to_remove]
+                st.success("✅ Carga removida")
+                st.rerun()
+        elif remove_type == "Gerador" and st.session_state.ps_model.generators:
+            gen_to_remove = st.selectbox("Selecione", list(st.session_state.ps_model.generators.keys()))
+            if st.button("🗑️ Remover Gerador", type="secondary"):
+                del st.session_state.ps_model.generators[gen_to_remove]
+                st.success("✅ Gerador removido")
+                st.rerun()
+        else:
+            st.info("ℹ️ Nenhum elemento deste tipo para remover")
+    
+    st.markdown("---")
+    
+    # GERENCIAMENTO DE PROJETO
+    st.header("💾 Projeto")
+    project_name = st.text_input("Nome do Projeto", value=st.session_state.ps_model.metadata["name"], key="project_name_input")
+    if project_name != st.session_state.ps_model.metadata["name"]:
+        st.session_state.ps_model.metadata["name"] = project_name
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 Salvar", use_container_width=True):
+            json_data = st.session_state.ps_model.to_json()
+            st.download_button(
+                label="📥 Download JSON",
+                data=json_data,
+                file_name=f"{project_name.replace(' ', '_')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+    
+    with col2:
+        uploaded_file = st.file_uploader("📂 Carregar", type=["json"], label_visibility="collapsed")
+        if uploaded_file:
+            try:
+                json_str = uploaded_file.read().decode("utf-8")
+                st.session_state.ps_model = PowerSystemModel.from_json(json_str)
+                st.session_state.simulation_results = None
+                st.success("✅ Projeto carregado!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Erro ao carregar: {str(e)}")
+    
+    if st.button("🗑️ Limpar Tudo", use_container_width=True):
+        st.session_state.ps_model = PowerSystemModel()
+        st.session_state.simulation_results = None
+        st.success("✅ Projeto limpo!")
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # SIMULAÇÃO
+    st.header("⚡ Simulação")
+    if st.button("🔍 Validar Rede", use_container_width=True):
+        st.session_state.show_validation = True
+    
+    if st.button("⚡ Calcular Fluxo de Potência", use_container_width=True, type="primary"):
+        with st.spinner("⚙️ Calculando..."):
+            results = SimulationEngine.run_power_flow(st.session_state.ps_model)
+            st.session_state.simulation_results = results
+            if results["success"]:
+                st.success("✅ Simulação convergiu!")
+            else:
+                st.error("❌ Simulação falhou")
+                for err in results.get("errors", []):
+                    st.warning(err)
+        st.rerun()
+    
+    # CURTO-CIRCUITO
+    if len(st.session_state.ps_model.buses) > 0:
+        st.markdown("---")
+        st.subheader("⚡ Curto-Circuito")
+        fault_bus = st.selectbox("Barra de falta", list(st.session_state.ps_model.buses.keys()), key="sc_bus")
+        if st.button("⚡ Calcular CC", use_container_width=True):
+            with st.spinner("Calculando curto-circuito..."):
+                sc_results = SimulationEngine.run_short_circuit(st.session_state.ps_model, fault_bus)
+                if sc_results["success"]:
+                    st.success(f"✅ Ikss = {sc_results['ikss_ka']:.2f} kA")
+                    with st.expander("Ver todas as correntes"):
+                        for bus_id, data in sc_results["all_buses"].items():
+                            st.write(f"{bus_id}: {data['ikss_ka']:.2f} kA")
+                else:
+                    st.error(f"❌ {sc_results.get('error', 'Erro desconhecido')}")
+
+# ============================================================================
+# ÁREA PRINCIPAL
+# ============================================================================
+
+if st.session_state.get("show_validation", False):
+    st.subheader("🔍 Validação da Rede")
+    is_valid, messages = NetworkValidator.validate(st.session_state.ps_model)
+    if is_valid:
+        st.success("✅ Rede válida e pronta para simulação!")
+    else:
+        st.error("❌ Rede com problemas:")
+    for msg in messages:
+        if "⚠️" in msg:
+            st.warning(msg)
+        else:
+            st.info(msg)
+    st.session_state.show_validation = False
+    st.markdown("---")
+
+col_diagram, col_results = st.columns([2.5, 1.5])
+
+with col_diagram:
+    st.subheader("📊 Diagrama Unifilar Interativo")
+    fig = create_network_diagram(st.session_state.ps_model, st.session_state.simulation_results)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+    
+    with st.expander("🎨 Legenda de Cores"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("🔴 **Barra Slack**")
+            st.markdown("🟢 **Barra PV**")
+            st.markdown("🔵 **Barra PQ**")
+        with col2:
+            st.markdown("🟡 **Subtensão** (< 0.95 pu)")
+            st.markdown("🟠 **Sobretensão** (> 1.05 pu)")
+        with col3:
+            st.markdown("⚡ **Carga**")
+            st.markdown("🔋 **Gerador**")
+
+with col_results:
+    st.subheader("📈 Resultados da Simulação")
+    
+    if st.session_state.simulation_results and st.session_state.simulation_results.get("success"):
+        results = st.session_state.simulation_results
+        
+        if results["violations"]:
+            display_violations(results["violations"])
+        else:
+            st.success("✅ Sem violações!")
+        
+        st.markdown("---")
+        
+        with st.expander("🔌 Tensões nas Barras", expanded=True):
+            bus_data = []
+            for bus_id, data in results["buses"].items():
+                bus_label = st.session_state.ps_model.buses[bus_id].label
+                vn_kv = st.session_state.ps_model.buses[bus_id].vn_kv
+                vm_pu = data['vm_pu']
+                status = "✅"
+                if vm_pu < 0.95:
+                    status = "🟡"
+                elif vm_pu > 1.05:
+                    status = "🟠"
+                bus_data.append({
+                    "Status": status,
+                    "Barra": bus_label,
+                    "V (pu)": f"{vm_pu:.4f}",
+                    "V (kV)": f"{vn_kv * vm_pu:.2f}",
+                    "θ (°)": f"{data['va_degree']:.2f}"
+                })
+            st.dataframe(bus_data, use_container_width=True, hide_index=True)
+        
+        if results["lines"]:
+            with st.expander("➖ Carregamento de Linhas"):
+                line_data = []
+                for line_id, data in results["lines"].items():
+                    loading = data['loading_percent']
+                    status = "✅"
+                    if loading > 100:
+                        status = "🔴"
+                    elif loading > 80:
+                        status = "🟡"
+                    line_data.append({
+                        "Status": status,
+                        "Linha": line_id,
+                        "Carga": f"{loading:.1f}%",
+                        "P (MW)": f"{data['p_from_mw']:.2f}",
+                        "I (kA)": f"{data['i_ka']:.3f}"
+                    })
+                st.dataframe(line_data, use_container_width=True, hide_index=True)
+        
+        if results["transformers"]:
+            with st.expander("🔄 Transformadores"):
+                trafo_data = []
+                for trafo_id, data in results["transformers"].items():
+                    loading = data['loading_percent']
+                    status = "✅" if loading <= 100 else "🔴"
+                    trafo_data.append({
+                        "Status": status,
+                        "Trafo": trafo_id,
+                        "Carga": f"{loading:.1f}%",
+                        "P (MW)": f"{data['p_hv_mw']:.2f}"
+                    })
+                st.dataframe(trafo_data, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        if st.button("📊 Exportar Resultados CSV", use_container_width=True):
+            bus_df = pd.DataFrame([
+                {
+                    "Barra": st.session_state.ps_model.buses[bid].label,
+                    "V_pu": data['vm_pu'],
+                    "Angulo_deg": data['va_degree'],
+                    "P_MW": data['p_mw'],
+                    "Q_MVAr": data['q_mvar']
+                }
+                for bid, data in results["buses"].items()
+            ])
+            csv = bus_df.to_csv(index=False)
+            st.download_button("📥 Download CSV", csv, "resultados_fluxo_potencia.csv", "text/csv", use_container_width=True)
+    else:
+        st.info("ℹ️ Execute a simulação para ver os resultados")
+        st.markdown("### 📊 Estatísticas do Modelo")
+        st.write(f"**Barras:** {len(st.session_state.ps_model.buses)}")
+        st.write(f"**Linhas:** {len(st.session_state.ps_model.lines)}")
+        st.write(f"**Transformadores:** {len(st.session_state.ps_model.transformers)}")
+        st.write(f"**Cargas:** {len(st.session_state.ps_model.loads)}")
+        st.write(f"**Geradores:** {len(st.session_state.ps_model.generators)}")
+        
+        if len(st.session_state.ps_model.loads) > 0:
+            total_p = sum(load.p_mw for load in st.session_state.ps_model.loads.values())
+            total_q = sum(load.q_mvar for load in st.session_state.ps_model.loads.values())
+            st.markdown("---")
+            st.write(f"**Demanda Total:**")
+            st.write(f"P = {total_p:.2f} MW")
+            st.write(f"Q = {total_q:.2f} MVAr")
+
+# ============================================================================
+# TABELAS DETALHADAS
+# ============================================================================
+
+with st.expander("📋 Elementos da Rede (Tabelas Completas)"):
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Barras", "Linhas", "Transformadores", "Cargas", "Geradores"])
+    
+    with tab1:
+        if st.session_state.ps_model.buses:
+            bus_df = pd.DataFrame([
+                {"ID": b.id, "Nome": b.label, "Posição X": b.x, "Posição Y": b.y, "Tensão (kV)": b.vn_kv, "Tipo": b.bus_type.upper()}
+                for b in st.session_state.ps_model.buses.values()
+            ])
+            st.dataframe(bus_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ Nenhuma barra adicionada")
+    
+    with tab2:
+        if st.session_state.ps_model.lines:
+            line_df = pd.DataFrame([
+                {"ID": l.id, "De": l.source, "Para": l.target, "Comprimento (km)": l.length_km, "Tipo": l.std_type, "Paralelo": l.parallel, "Em Serviço": "✅" if l.in_service else "❌"}
+                for l in st.session_state.ps_model.lines.values()
+            ])
+            st.dataframe(line_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ Nenhuma linha adicionada")
+    
+    with tab3:
+        if st.session_state.ps_model.transformers:
+            trafo_df = pd.DataFrame([
+                {"ID": t.id, "Primário": t.source, "Secundário": t.target, "Tipo": t.std_type, "Tap": t.tap_pos, "Em Serviço": "✅" if t.in_service else "❌"}
+                for t in st.session_state.ps_model.transformers.values()
+            ])
+            st.dataframe(trafo_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ Nenhum transformador adicionado")
+    
+    with tab4:
+        if st.session_state.ps_model.loads:
+            load_df = pd.DataFrame([
+                {"ID": l.id, "Nome": l.label, "Barra": l.parent_bus, "P (MW)": l.p_mw, "Q (MVAr)": l.q_mvar, "Escala": l.scaling}
+                for l in st.session_state.ps_model.loads.values()
+            ])
+            st.dataframe(load_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ Nenhuma carga adicionada")
+    
+    with tab5:
+        if st.session_state.ps_model.generators:
+            gen_df = pd.DataFrame([
+                {"ID": g.id, "Nome": g.label, "Barra": g.parent_bus, "P (MW)": g.p_mw, "V (pu)": g.vm_pu, "Q mín (MVAr)": g.min_q_mvar, "Q máx (MVAr)": g.max_q_mvar}
+                for g in st.session_state.ps_model.generators.values()
+            ])
+            st.dataframe(gen_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ Nenhum gerador adicionado")
+
+# ============================================================================
+# EXEMPLOS RÁPIDOS
+# ============================================================================
+
+with st.expander("🚀 Exemplos Rápidos - Carregar Sistema Padrão"):
+    st.markdown("### Sistemas IEEE de Teste")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📘 IEEE 4 Barras", use_container_width=True):
+            model = PowerSystemModel()
+            model.metadata["name"] = "IEEE 4 Barras"
+            model.add_bus(BusNode("b1", "Barra 1 (Slack)", 0, 100, 138.0, "slack"))
+            model.add_bus(BusNode("b2", "Barra 2", 150, 100, 138.0, "pq"))
+            model.add_bus(BusNode("b3", "Barra 3", 150, 0, 13.8, "pq"))
+            model.add_bus(BusNode("b4", "Barra 4", 300, 50, 13.8, "pq"))
+            model.add_line(LineEdge("l1", "b1", "b2", 50.0, "94-AL1/15-ST1A 10.0"))
+            model.add_transformer(TransformerEdge("t1", "b2", "b3", "25 MVA 110/20 kV"))
+            model.add_line(LineEdge("l2", "b3", "b4", 10.0, "NAYY 4x150 SE"))
+            model.add_load(LoadNode("load1", "Carga Industrial", "b4", 20.0, 10.0))
+            model.add_generator(GenNode("gen1", "Gerador Local", "b3", 5.0, 1.0))
+            st.session_state.ps_model = model
+            st.success("✅ Sistema IEEE 4 Barras carregado!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📗 Sistema Simples 3 Barras", use_container_width=True):
+            model = PowerSystemModel()
+            model.metadata["name"] = "Sistema Simples 3 Barras"
+            model.add_bus(BusNode("b1", "Subestação", 0, 0, 138.0, "slack"))
+            model.add_bus(BusNode("b2", "Indústria", 100, 0, 138.0, "pq"))
+            model.add_bus(BusNode("b3", "Comércio", 200, 0, 138.0, "pq"))
+            model.add_line(LineEdge("l1", "b1", "b2", 25.0, "94-AL1/15-ST1A 10.0"))
+            model.add_line(LineEdge("l2", "b2", "b3", 25.0, "94-AL1/15-ST1A 10.0"))
+            model.add_load(LoadNode("load1", "Carga Indústria", "b2", 30.0, 15.0))
+            model.add_load(LoadNode("load2", "Carga Comércio", "b3", 20.0, 10.0))
+            st.session_state.ps_model = model
+            st.success("✅ Sistema 3 Barras carregado!")
+            st.rerun()
+    
+    with col3:
+        if st.button("📙 Rede com Geração Distribuída", use_container_width=True):
+            model = PowerSystemModel()
+            model.metadata["name"] = "Rede com GD"
+            model.add_bus(BusNode("b1", "Concessionária", 0, 50, 138.0, "slack"))
+            model.add_bus(BusNode("b2", "Alimentador", 100, 50, 13.8, "pq"))
+            model.add_bus(BusNode("b3", "Solar Farm", 200, 80, 13.8, "pv"))
+            model.add_bus(BusNode("b4", "Consumidor", 200, 20, 13.8, "pq"))
+            model.add_transformer(TransformerEdge("t1", "b1", "b2", "25 MVA 110/20 kV"))
+            model.add_line(LineEdge("l1", "b2", "b3", 15.0, "NAYY 4x150 SE"))
+            model.add_line(LineEdge("l2", "b2", "b4", 15.0, "NAYY 4x150 SE"))
+            model.add_generator(GenNode("solar1", "Usina Solar", "b3", 10.0, 1.0))
+            model.add_load(LoadNode("load1", "Carga Residencial", "b4", 15.0, 7.0))
+            st.session_state.ps_model = model
+            st.success("✅ Rede com GD carregada!")
+            st.rerun()
+
+# ============================================================================
+# RODAPÉ
+# ============================================================================
+
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: #666; padding: 1rem;">
+    <strong>Power System Studio v3.0</strong> | Arquitetura Profissional<br>
+    🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit<br>
+    Desenvolvido para análise técnica de sistemas elétricos de potência<br>
+    <br>
+    <em>Funcionalidades: Fluxo de Potência • Curto-Circuito • Validação Elétrica • Detecção de Violações</em>
+</div>
+""", unsafe_allow_html=True)
