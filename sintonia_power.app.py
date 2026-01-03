@@ -564,6 +564,8 @@ def init_session_state():
         st.session_state.simulation_results = None
     if "show_validation" not in st.session_state:
         st.session_state.show_validation = False
+    if "custom_voltage" not in st.session_state:
+        st.session_state.custom_voltage = 138.0  # Valor padrão para tensão personalizada
 
 init_session_state()
 
@@ -607,19 +609,37 @@ with st.sidebar:
             with col2:
                 y = st.number_input("Posição Y", value=0.0, step=10.0)
             
-            # Tensão nominal com opção personalizada
+            # Tensão nominal com opção personalizada - CORRIGIDO
             standard_voltages = LibraryManager.get_standard_voltages()
             voltage_options = ["Personalizado"] + [f"{v} kV" for v in standard_voltages]
-            selected_voltage = st.selectbox("Tensão Nominal", voltage_options, index=5)  # índice 5 = 138 kV
             
-            if selected_voltage == "Personalizado":
-                col_v1, col_v2 = st.columns([1, 3])
-                with col_v1:
-                    vn_kv = st.number_input("kV", value=138.0, min_value=0.4, step=1.0)
-                with col_v2:
-                    st.markdown("<br><small>Digite o valor personalizado</small>", unsafe_allow_html=True)
+            # Usar um índice padrão (138 kV)
+            default_index = 5  # 138 kV
+            
+            selected_voltage_option = st.selectbox(
+                "Tensão Nominal", 
+                voltage_options, 
+                index=default_index,
+                key="voltage_select"
+            )
+            
+            vn_kv = 138.0  # Valor padrão
+            
+            # Se selecionou "Personalizado", mostrar campo numérico
+            if selected_voltage_option == "Personalizado":
+                vn_kv = st.number_input(
+                    "Tensão Personalizada (kV)", 
+                    value=st.session_state.custom_voltage, 
+                    min_value=0.4, 
+                    max_value=1000.0,
+                    step=1.0,
+                    key="custom_voltage_input"
+                )
+                # Atualizar valor na sessão
+                st.session_state.custom_voltage = vn_kv
             else:
-                vn_kv = float(selected_voltage.replace(" kV", ""))
+                # Extrair o valor numérico da string selecionada
+                vn_kv = float(selected_voltage_option.replace(" kV", ""))
                 st.info(f"Tensão selecionada: {vn_kv} kV")
             
             bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"], 
@@ -1130,7 +1150,7 @@ with st.expander("🚀 Exemplos Rápidos - Carregar Sistema Padrão"):
 
 st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #666; padding: 1rem;">
+<div style="text-align: center; color: #666; font-size: 0.9rem; padding: 1rem;">
     <strong>Power System Studio v3.0</strong> | Arquitetura Profissional<br>
     🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit<br>
     Desenvolvido para análise técnica de sistemas elétricos de potência<br>
