@@ -1,14 +1,17 @@
 """
-POWER SYSTEM STUDIO v3.0 - Sistema Completo
+POWER SYSTEM STUDIO v4.0 - Sistema Completo Avançado
 Aplicação profissional para análise de sistemas elétricos de potência
 
-Salve este arquivo como: power_system_app.py
-Execute com: streamlit run power_system_app.py
+Salve este arquivo como: power_system_studio.py
+Execute com: streamlit run power_system_studio.py
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch, Circle, FancyArrowPatch
 import pandapower as pp
 import json
 from datetime import datetime
@@ -20,7 +23,7 @@ from dataclasses import dataclass, asdict
 # ============================================================================
 
 st.set_page_config(
-    page_title="Power System Studio v3.0",
+    page_title="Power System Studio v4.0",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -47,6 +50,13 @@ st.markdown("""
         padding: 0.75rem;
         border-radius: 0.5rem;
         border-left: 4px solid #dc3545;
+        margin: 0.5rem 0;
+    }
+    .element-card {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #007bff;
         margin: 0.5rem 0;
     }
 </style>
@@ -116,7 +126,7 @@ class TransformerEdge:
 
 class PowerSystemModel:
     def __init__(self):
-        self.metadata = {"version": "3.0", "created": datetime.now().isoformat(), "name": "Projeto Sem Título"}
+        self.metadata = {"version": "4.0", "created": datetime.now().isoformat(), "name": "Projeto Sem Título"}
         self.buses: Dict[str, BusNode] = {}
         self.loads: Dict[str, LoadNode] = {}
         self.generators: Dict[str, GenNode] = {}
@@ -414,6 +424,16 @@ class LibraryManager:
     @staticmethod
     def get_standard_voltages() -> List[float]:
         return [0.4, 13.8, 34.5, 69.0, 88.0, 138.0, 230.0, 345.0, 500.0]
+    
+    @staticmethod
+    def get_impedance_line_types() -> List[Dict]:
+        return [
+            {"name": "AL-7 (25 mm²)", "R": 0.12, "X": 0.08, "B": 0.0001, "I_max": 100},
+            {"name": "AL-19 (50 mm²)", "R": 0.06, "X": 0.07, "B": 0.0002, "I_max": 150},
+            {"name": "AL-37 (95 mm²)", "R": 0.03, "X": 0.06, "B": 0.0003, "I_max": 220},
+            {"name": "AL-61 (150 mm²)", "R": 0.02, "X": 0.05, "B": 0.0004, "I_max": 300},
+            {"name": "AL-91 (240 mm²)", "R": 0.012, "X": 0.04, "B": 0.0005, "I_max": 400}
+        ]
 
 # ============================================================================
 # VISUALIZAÇÃO
@@ -427,7 +447,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
         bus_colors = []
         hover_texts = []
         for bus in model.buses.values():
-            # Verificar se a barra existe nos resultados
             if bus.id in results["buses"]:
                 vm_pu = results["buses"][bus.id]["vm_pu"]
                 va_deg = results["buses"][bus.id]["va_degree"]
@@ -440,7 +459,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
                 bus_colors.append(color)
                 hover_texts.append(f"<b>{bus.label}</b><br>Tensão: {vm_pu:.4f} pu ({bus.vn_kv * vm_pu:.2f} kV)<br>Ângulo: {va_deg:.2f}°<br>Tipo: {bus.bus_type.upper()}")
             else:
-                # Barra sem resultados (cor padrão)
                 bus_colors.append(color_map.get(bus.bus_type, "#6c757d"))
                 hover_texts.append(f"<b>{bus.label}</b><br>Tensão: {bus.vn_kv} kV<br>Tipo: {bus.bus_type.upper()}")
     else:
@@ -448,7 +466,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
         hover_texts = [f"<b>{bus.label}</b><br>Tensão: {bus.vn_kv} kV<br>Tipo: {bus.bus_type.upper()}" for bus in model.buses.values()]
     
     for line in model.lines.values():
-        # Verificar se as barras existem
         if line.source not in model.buses or line.target not in model.buses:
             continue
             
@@ -471,7 +488,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
                                 hovertext=line_hover, showlegend=False))
     
     for trafo in model.transformers.values():
-        # Verificar se as barras existem
         if trafo.source not in model.buses or trafo.target not in model.buses:
             continue
             
@@ -503,7 +519,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
         ))
     
     for load in model.loads.values():
-        # Verificar se a barra pai existe
         if load.parent_bus not in model.buses:
             continue
             
@@ -517,7 +532,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
         ))
     
     for gen in model.generators.values():
-        # Verificar se a barra pai existe
         if gen.parent_bus not in model.buses:
             continue
             
@@ -539,6 +553,67 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
     )
     return fig
 
+def desenhar_diagrama_matplotlib(model):
+    """Desenha o diagrama do sistema usando matplotlib"""
+    if not model.buses:
+        return None
+    
+    fig, ax = plt.subplots(figsize=(14, 8))
+    ax.set_xlim(-1, 11)
+    ax.set_ylim(-1, 11)
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlabel('Posição X', fontsize=12)
+    ax.set_ylabel('Posição Y', fontsize=12)
+    ax.set_title('Diagrama do Sistema Elétrico', fontsize=16, fontweight='bold')
+    
+    # Cores por tipo
+    cores = {
+        'slack': '#FF6B6B',
+        'pv': '#4ECDC4',
+        'pq': '#95E1D3',
+        'load': '#F38181',
+        'generator': '#FFA07A'
+    }
+    
+    # Desenhar conexões (linhas)
+    for line in model.lines.values():
+        if line.source in model.buses and line.target in model.buses:
+            origem = model.buses[line.source]
+            destino = model.buses[line.target]
+            ax.plot([origem.x, destino.x], [origem.y, destino.y], 'k-', linewidth=2, alpha=0.6)
+            
+            arrow = FancyArrowPatch((origem.x, origem.y), (destino.x, destino.y),
+                                   arrowstyle='->', mutation_scale=20, 
+                                   linewidth=2, color='black', alpha=0.6)
+            ax.add_patch(arrow)
+    
+    # Desenhar barras
+    for bus in model.buses.values():
+        x, y = bus.x, bus.y
+        cor = cores.get(bus.bus_type, '#CCCCCC')
+        
+        if bus.bus_type == 'slack':
+            circle = Circle((x, y), 0.4, color=cor, ec='black', linewidth=2, zorder=10)
+            ax.add_patch(circle)
+            ax.text(x, y, '~', fontsize=20, ha='center', va='center', fontweight='bold')
+        elif bus.bus_type == 'pv':
+            rect = FancyBboxPatch((x-0.5, y-0.2), 1, 0.4, 
+                                 boxstyle="round,pad=0.05", 
+                                 color=cor, ec='black', linewidth=2, zorder=10)
+            ax.add_patch(rect)
+            ax.text(x, y, 'PV', fontsize=12, ha='center', va='center', fontweight='bold')
+        else:  # pq
+            circle = Circle((x, y), 0.3, color=cor, ec='black', linewidth=2, zorder=10)
+            ax.add_patch(circle)
+            ax.text(x, y, 'PQ', fontsize=10, ha='center', va='center')
+        
+        # Nome da barra
+        ax.text(x, y-0.8, bus.label, fontsize=10, ha='center', 
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return fig
+
 def display_violations(violations: List[Dict]):
     if not violations:
         st.success("✅ Nenhuma violação detectada!")
@@ -554,6 +629,77 @@ def display_violations(violations: List[Dict]):
         </div>""", unsafe_allow_html=True)
 
 # ============================================================================
+# SIMULAÇÃO SIMPLIFICADA
+# ============================================================================
+
+def calcular_fluxo_potencia_simplificado(model: PowerSystemModel):
+    """Calcula o fluxo de potência do sistema montado (versão simplificada)"""
+    if not model.buses:
+        return None
+    
+    geradores = model.generators.values()
+    cargas = model.loads.values()
+    
+    if not geradores:
+        return None
+    
+    # Calcular potências
+    P_gerada = sum([g.p_mw for g in geradores])
+    Q_gerada = sum([g.vm_pu * 10 for g in geradores])  # Aproximação
+    P_carga = sum([l.p_mw for l in cargas])
+    Q_carga = sum([l.q_mvar for l in cargas])
+    
+    # Calcular perdas (simplificado)
+    P_perdas = 0
+    for linha in model.lines.values():
+        # Estimativa de corrente baseada na potência
+        I_estimado = P_carga / (len(model.lines) if model.lines else 1)
+        P_perdas += 0.01 * (I_estimado ** 2)  # Aproximação
+    
+    resultados = {
+        'P_gerada': P_gerada,
+        'Q_gerada': Q_gerada,
+        'P_carga': P_carga,
+        'Q_carga': Q_carga,
+        'P_perdas': P_perdas,
+        'eficiencia': (P_carga / P_gerada * 100) if P_gerada > 0 else 0,
+        'n_geradores': len(geradores),
+        'n_cargas': len(cargas),
+        'n_barramentos': len(model.buses),
+        'n_linhas': len(model.lines),
+        'n_transformers': len(model.transformers),
+        'elementos': []
+    }
+    
+    # Detalhes de cada elemento
+    for elem in list(model.buses.values()) + list(model.generators.values()) + \
+                 list(model.loads.values()) + list(model.lines.values()) + \
+                 list(model.transformers.values()):
+        if isinstance(elem, BusNode):
+            tipo = f"Barra {elem.bus_type.upper()}"
+            params = f"Tensão: {elem.vn_kv} kV"
+        elif isinstance(elem, GenNode):
+            tipo = "Gerador"
+            params = f"P: {elem.p_mw} MW, V: {elem.vm_pu} pu"
+        elif isinstance(elem, LoadNode):
+            tipo = "Carga"
+            params = f"P: {elem.p_mw} MW, Q: {elem.q_mvar} MVAr"
+        elif isinstance(elem, LineEdge):
+            tipo = "Linha"
+            params = f"Comprimento: {elem.length_km} km"
+        else:
+            tipo = "Transformador"
+            params = f"Tipo: {elem.std_type}"
+        
+        resultados['elementos'].append({
+            'nome': elem.label if hasattr(elem, 'label') else elem.id,
+            'tipo': tipo,
+            'parametros': params
+        })
+    
+    return resultados
+
+# ============================================================================
 # INICIALIZAÇÃO
 # ============================================================================
 
@@ -562,12 +708,18 @@ def init_session_state():
         st.session_state.ps_model = PowerSystemModel()
     if "simulation_results" not in st.session_state:
         st.session_state.simulation_results = None
+    if "simple_results" not in st.session_state:
+        st.session_state.simple_results = None
     if "show_validation" not in st.session_state:
         st.session_state.show_validation = False
     if "custom_voltage" not in st.session_state:
         st.session_state.custom_voltage = 138.0
     if "voltage_mode" not in st.session_state:
         st.session_state.voltage_mode = "Tensões Padrão"
+    if "view_mode" not in st.session_state:
+        st.session_state.view_mode = "Plotly"
+    if "simulation_mode" not in st.session_state:
+        st.session_state.simulation_mode = "Pandapower"
 
 init_session_state()
 
@@ -575,8 +727,8 @@ init_session_state()
 # INTERFACE PRINCIPAL
 # ============================================================================
 
-st.markdown('<h1 class="main-header">⚡ Power System Studio v3.0</h1>', unsafe_allow_html=True)
-st.markdown("**Plataforma Profissional para Análise de Sistemas Elétricos de Potência**")
+st.markdown('<h1 class="main-header">⚡ Power System Studio v4.0</h1>', unsafe_allow_html=True)
+st.markdown("**Plataforma Avançada para Análise de Sistemas Elétricos de Potência**")
 
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 with col_m1:
@@ -595,7 +747,7 @@ st.markdown("---")
 # ============================================================================
 
 with st.sidebar:
-    st.header("🔧 Ferramentas de Edição")
+    st.header("🔧 Painel de Controle")
     tool = st.radio("Selecione o elemento:", ["🔵 Barra", "➖ Linha", "🔄 Transformador", "📊 Carga", "⚙️ Gerador", "🗑️ Remover"], key="tool_selector")
     st.markdown("---")
     
@@ -622,7 +774,6 @@ with st.sidebar:
             
             if voltage_mode == "Tensões Padrão":
                 standard_voltages = LibraryManager.get_standard_voltages()
-                voltage_labels = {v: f"{v} kV" for v in standard_voltages}
                 
                 # Usar 138 kV como padrão
                 default_voltage = 138.0 if 138.0 in standard_voltages else standard_voltages[0]
@@ -652,30 +803,12 @@ with st.sidebar:
             bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"], 
                                    help="Slack: Barra de referência\nPV: Barra de geração com controle de tensão\nPQ: Barra de carga")
             
-            # Informações adicionais
-            with st.expander("🔧 Configurações avançadas"):
-                zone = st.text_input("Zona", value="Zona 1")
-                col_adv1, col_adv2 = st.columns(2)
-                with col_adv1:
-                    max_vm_pu = st.number_input("V máx (pu)", value=1.1, min_value=1.0, max_value=1.2, step=0.01)
-                with col_adv2:
-                    min_vm_pu = st.number_input("V mín (pu)", value=0.9, min_value=0.8, max_value=1.0, step=0.01)
-            
             if st.form_submit_button("➕ Adicionar Barra", use_container_width=True, type="primary"):
                 try:
                     if bus_id in st.session_state.ps_model.buses:
                         st.error(f"❌ ID '{bus_id}' já existe!")
                     else:
-                        # Criar barra com todas as informações
-                        bus = BusNode(
-                            id=bus_id, 
-                            label=bus_label, 
-                            x=x, 
-                            y=y, 
-                            vn_kv=vn_kv, 
-                            bus_type=bus_type,
-                            zone=zone if 'zone' in locals() else None
-                        )
+                        bus = BusNode(id=bus_id, label=bus_label, x=x, y=y, vn_kv=vn_kv, bus_type=bus_type)
                         st.session_state.ps_model.add_bus(bus)
                         st.success(f"✅ Barra '{bus_label}' adicionada!")
                         st.rerun()
@@ -863,6 +996,7 @@ with st.sidebar:
     if st.button("🗑️ Limpar Tudo", use_container_width=True):
         st.session_state.ps_model = PowerSystemModel()
         st.session_state.simulation_results = None
+        st.session_state.simple_results = None
         st.success("✅ Projeto limpo!")
         st.rerun()
     
@@ -870,19 +1004,43 @@ with st.sidebar:
     
     # SIMULAÇÃO
     st.header("⚡ Simulação")
+    
+    # Modo de visualização
+    st.subheader("🎨 Visualização")
+    st.session_state.view_mode = st.radio(
+        "Tipo de diagrama:",
+        ["Plotly (Interativo)", "Matplotlib (Clássico)"],
+        horizontal=True
+    )
+    
+    # Modo de simulação
+    st.subheader("📊 Método de Cálculo")
+    st.session_state.simulation_mode = st.selectbox(
+        "Escolha o método:",
+        ["Pandapower (Avançado)", "Simplificado"]
+    )
+    
     if st.button("🔍 Validar Rede", use_container_width=True):
         st.session_state.show_validation = True
     
     if st.button("⚡ Calcular Fluxo de Potência", use_container_width=True, type="primary"):
-        with st.spinner("⚙️ Calculando..."):
-            results = SimulationEngine.run_power_flow(st.session_state.ps_model)
-            st.session_state.simulation_results = results
-            if results["success"]:
-                st.success("✅ Simulação convergiu!")
-            else:
-                st.error("❌ Simulação falhou")
-                for err in results.get("errors", []):
-                    st.warning(err)
+        if st.session_state.simulation_mode == "Pandapower (Avançado)":
+            with st.spinner("⚙️ Calculando com Pandapower..."):
+                results = SimulationEngine.run_power_flow(st.session_state.ps_model)
+                st.session_state.simulation_results = results
+                if results["success"]:
+                    st.success("✅ Simulação convergiu!")
+                else:
+                    st.error("❌ Simulação falhou")
+                    for err in results.get("errors", []):
+                        st.warning(err)
+        else:
+            with st.spinner("⚙️ Calculando (método simplificado)..."):
+                st.session_state.simple_results = calcular_fluxo_potencia_simplificado(st.session_state.ps_model)
+                if st.session_state.simple_results:
+                    st.success("✅ Cálculo realizado!")
+                else:
+                    st.error("❌ Erro no cálculo")
         st.rerun()
     
     # CURTO-CIRCUITO
@@ -902,46 +1060,125 @@ with st.sidebar:
                     st.error(f"❌ {sc_results.get('error', 'Erro desconhecido')}")
 
 # ============================================================================
-# ÁREA PRINCIPAL
+# ÁREA PRINCIPAL - TABS
 # ============================================================================
 
-if st.session_state.get("show_validation", False):
-    st.subheader("🔍 Validação da Rede")
-    is_valid, messages = NetworkValidator.validate(st.session_state.ps_model)
-    if is_valid:
-        st.success("✅ Rede válida e pronta para simulação!")
-    else:
-        st.error("❌ Rede com problemas:")
-    for msg in messages:
-        if "⚠️" in msg:
-            st.warning(msg)
-        else:
-            st.info(msg)
-    st.session_state.show_validation = False
-    st.markdown("---")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Diagrama", "📋 Elementos", "📈 Resultados", "📊 Estatísticas", "ℹ️ Ajuda"])
 
-col_diagram, col_results = st.columns([2.5, 1.5])
-
-with col_diagram:
-    st.subheader("📊 Diagrama Unifilar Interativo")
-    fig = create_network_diagram(st.session_state.ps_model, st.session_state.simulation_results)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+with tab1:
+    st.subheader("Diagrama do Sistema Elétrico")
     
-    with st.expander("🎨 Legenda de Cores"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("🔴 **Barra Slack**")
-            st.markdown("🟢 **Barra PV**")
-            st.markdown("🔵 **Barra PQ**")
-        with col2:
-            st.markdown("🟡 **Subtensão** (< 0.95 pu)")
-            st.markdown("🟠 **Sobretensão** (> 1.05 pu)")
-        with col3:
-            st.markdown("⚡ **Carga**")
-            st.markdown("🔋 **Gerador**")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if st.session_state.view_mode == "Plotly (Interativo)":
+            fig = create_network_diagram(st.session_state.ps_model, st.session_state.simulation_results)
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        else:
+            fig = desenhar_diagrama_matplotlib(st.session_state.ps_model)
+            if fig:
+                st.pyplot(fig)
+                plt.close()
+            else:
+                st.info("👈 Use o painel lateral para adicionar elementos ao sistema")
+    
+    with col2:
+        st.markdown("### 🎨 Legenda")
+        st.markdown("🔴 **Barra Slack**")
+        st.markdown("🟢 **Barra PV**")
+        st.markdown("🔵 **Barra PQ**")
+        st.markdown("⚡ **Carga**")
+        st.markdown("🔋 **Gerador**")
+        st.markdown("➖ **Linha**")
+        st.markdown("🔄 **Transformador**")
+        
+        if st.session_state.simulation_results and st.session_state.simulation_results.get("violations"):
+            st.markdown("---")
+            st.markdown("### ⚠️ Violações")
+            for v in st.session_state.simulation_results["violations"][:3]:
+                icon = "🔴" if v.get("severity") == "error" else "🟡"
+                st.markdown(f"{icon} {v['element']}: {v['type']}")
 
-with col_results:
-    st.subheader("📈 Resultados da Simulação")
+with tab2:
+    st.subheader("Elementos do Sistema")
+    
+    if st.session_state.ps_model.buses:
+        # Tabela de barras
+        with st.expander("🔵 Barras", expanded=True):
+            bus_data = []
+            for bus in st.session_state.ps_model.buses.values():
+                bus_data.append({
+                    "ID": bus.id,
+                    "Nome": bus.label,
+                    "Tipo": bus.bus_type.upper(),
+                    "Tensão (kV)": bus.vn_kv,
+                    "Posição": f"({bus.x}, {bus.y})"
+                })
+            st.dataframe(pd.DataFrame(bus_data), use_container_width=True)
+        
+        # Tabela de cargas
+        if st.session_state.ps_model.loads:
+            with st.expander("📊 Cargas"):
+                load_data = []
+                for load in st.session_state.ps_model.loads.values():
+                    load_data.append({
+                        "ID": load.id,
+                        "Nome": load.label,
+                        "Barra": load.parent_bus,
+                        "P (MW)": load.p_mw,
+                        "Q (MVAr)": load.q_mvar,
+                        "Escala": load.scaling
+                    })
+                st.dataframe(pd.DataFrame(load_data), use_container_width=True)
+        
+        # Tabela de geradores
+        if st.session_state.ps_model.generators:
+            with st.expander("⚙️ Geradores"):
+                gen_data = []
+                for gen in st.session_state.ps_model.generators.values():
+                    gen_data.append({
+                        "ID": gen.id,
+                        "Nome": gen.label,
+                        "Barra": gen.parent_bus,
+                        "P (MW)": gen.p_mw,
+                        "V (pu)": gen.vm_pu,
+                        "Q min": gen.min_q_mvar,
+                        "Q max": gen.max_q_mvar
+                    })
+                st.dataframe(pd.DataFrame(gen_data), use_container_width=True)
+        
+        # Tabela de linhas
+        if st.session_state.ps_model.lines:
+            with st.expander("➖ Linhas"):
+                line_data = []
+                for line in st.session_state.ps_model.lines.values():
+                    line_data.append({
+                        "ID": line.id,
+                        "De": line.source,
+                        "Para": line.target,
+                        "Comprimento (km)": line.length_km,
+                        "Tipo": line.std_type,
+                        "Paralelo": line.parallel
+                    })
+                st.dataframe(pd.DataFrame(line_data), use_container_width=True)
+        
+        # Tabela de transformadores
+        if st.session_state.ps_model.transformers:
+            with st.expander("🔄 Transformadores"):
+                trafo_data = []
+                for trafo in st.session_state.ps_model.transformers.values():
+                    trafo_data.append({
+                        "ID": trafo.id,
+                        "Primário": trafo.source,
+                        "Secundário": trafo.target,
+                        "Tipo": trafo.std_type,
+                        "Tap": trafo.tap_pos
+                    })
+                st.dataframe(pd.DataFrame(trafo_data), use_container_width=True)
+    else:
+        st.info("👈 Use o painel lateral para adicionar elementos ao sistema")
+
+with tab3:
+    st.subheader("Resultados da Simulação")
     
     if st.session_state.simulation_results and st.session_state.simulation_results.get("success"):
         results = st.session_state.simulation_results
@@ -1005,101 +1242,217 @@ with col_results:
                         "P (MW)": f"{data['p_hv_mw']:.2f}"
                     })
                 st.dataframe(trafo_data, use_container_width=True, hide_index=True)
+    
+    elif st.session_state.simple_results:
+        res = st.session_state.simple_results
+        
+        # Métricas principais
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Potência Gerada (P)", f"{res['P_gerada']:.2f} MW")
+        with col2:
+            st.metric("Potência Consumida (P)", f"{res['P_carga']:.2f} MW")
+        with col3:
+            st.metric("Perdas (P)", f"{res['P_perdas']:.2f} MW")
+        with col4:
+            st.metric("Eficiência", f"{res['eficiencia']:.1f} %")
         
         st.markdown("---")
-        if st.button("📊 Exportar Resultados CSV", use_container_width=True):
-            bus_df = pd.DataFrame([
-                {
-                    "Barra": st.session_state.ps_model.buses[bid].label,
-                    "V_pu": data['vm_pu'],
-                    "Angulo_deg": data['va_degree'],
-                    "P_MW": data['p_mw'],
-                    "Q_MVAr": data['q_mvar']
-                }
-                for bid, data in results["buses"].items()
-            ])
-            csv = bus_df.to_csv(index=False)
-            st.download_button("📥 Download CSV", csv, "resultados_fluxo_potencia.csv", "text/csv", use_container_width=True)
-    else:
-        st.info("ℹ️ Execute a simulação para ver os resultados")
-        st.markdown("### 📊 Estatísticas do Modelo")
-        st.write(f"**Barras:** {len(st.session_state.ps_model.buses)}")
-        st.write(f"**Linhas:** {len(st.session_state.ps_model.lines)}")
-        st.write(f"**Transformadores:** {len(st.session_state.ps_model.transformers)}")
-        st.write(f"**Cargas:** {len(st.session_state.ps_model.loads)}")
-        st.write(f"**Geradores:** {len(st.session_state.ps_model.generators)}")
         
-        if len(st.session_state.ps_model.loads) > 0:
-            total_p = sum(load.p_mw for load in st.session_state.ps_model.loads.values())
-            total_q = sum(load.q_mvar for load in st.session_state.ps_model.loads.values())
-            st.markdown("---")
-            st.write(f"**Demanda Total:**")
-            st.write(f"P = {total_p:.2f} MW")
-            st.write(f"Q = {total_q:.2f} MVAr")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Potência Reativa Gerada (Q)", f"{res['Q_gerada']:.2f} MVAr")
+        with col2:
+            st.metric("Potência Reativa Consumida (Q)", f"{res['Q_carga']:.2f} MVAr")
+        
+        # Gráficos
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Distribuição de Potência Ativa")
+            fig, ax = plt.subplots(figsize=(6, 4))
+            labels = ['Gerada', 'Consumida', 'Perdas']
+            sizes = [res['P_gerada'], res['P_carga'], res['P_perdas']]
+            colors = ['#FF6B6B', '#4ECDC4', '#FFA07A']
+            ax.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors, startangle=90)
+            ax.axis('equal')
+            st.pyplot(fig)
+            plt.close()
+        
+        with col2:
+            st.subheader("Composição do Sistema")
+            fig, ax = plt.subplots(figsize=(6, 4))
+            labels = ['Geradores', 'Cargas', 'Barramentos', 'Linhas', 'Transformadores']
+            sizes = [res['n_geradores'], res['n_cargas'], res['n_barramentos'], res['n_linhas'], res['n_transformers']]
+            colors = ['#FF6B6B', '#95E1D3', '#4ECDC4', '#F38181', '#FFA07A']
+            ax.bar(labels, sizes, color=colors)
+            ax.set_ylabel('Quantidade')
+            ax.set_title('Elementos do Sistema')
+            plt.xticks(rotation=45)
+            st.pyplot(fig)
+            plt.close()
+    else:
+        st.info("👈 Use o botão 'Calcular Fluxo de Potência' no painel lateral")
 
-# ============================================================================
-# TABELAS DETALHADAS
-# ============================================================================
-
-with st.expander("📋 Elementos da Rede (Tabelas Completas)"):
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Barras", "Linhas", "Transformadores", "Cargas", "Geradores"])
+with tab4:
+    st.subheader("📊 Estatísticas e Análises")
     
-    with tab1:
+    if st.session_state.ps_model.buses:
+        # Resumo do sistema
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total de Elementos", 
+                     len(st.session_state.ps_model.buses) + 
+                     len(st.session_state.ps_model.loads) + 
+                     len(st.session_state.ps_model.generators) + 
+                     len(st.session_state.ps_model.lines) + 
+                     len(st.session_state.ps_model.transformers))
+        
+        with col2:
+            total_p_load = sum(load.p_mw for load in st.session_state.ps_model.loads.values())
+            st.metric("Demanda Total (P)", f"{total_p_load:.2f} MW")
+        
+        with col3:
+            total_q_load = sum(load.q_mvar for load in st.session_state.ps_model.loads.values())
+            st.metric("Demanda Total (Q)", f"{total_q_load:.2f} MVAr")
+        
+        st.markdown("---")
+        
+        # Distribuição por tipo de barra
         if st.session_state.ps_model.buses:
-            bus_df = pd.DataFrame([
-                {"ID": b.id, "Nome": b.label, "Posição X": b.x, "Posição Y": b.y, "Tensão (kV)": b.vn_kv, "Tipo": b.bus_type.upper()}
-                for b in st.session_state.ps_model.buses.values()
-            ])
-            st.dataframe(bus_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("ℹ️ Nenhuma barra adicionada")
+            bus_types = {}
+            for bus in st.session_state.ps_model.buses.values():
+                bus_types[bus.bus_type] = bus_types.get(bus.bus_type, 0) + 1
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Distribuição por Tipo de Barra")
+                fig, ax = plt.subplots(figsize=(6, 4))
+                labels = [f"{k.upper()} ({v})" for k, v in bus_types.items()]
+                sizes = list(bus_types.values())
+                colors = ['#FF6B6B', '#4ECDC4', '#95E1D3'][:len(sizes)]
+                ax.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors, startangle=90)
+                ax.axis('equal')
+                st.pyplot(fig)
+                plt.close()
+            
+            with col2:
+                st.subheader("Distribuição por Nível de Tensão")
+                voltage_levels = {}
+                for bus in st.session_state.ps_model.buses.values():
+                    level = f"{bus.vn_kv:.0f} kV"
+                    voltage_levels[level] = voltage_levels.get(level, 0) + 1
+                
+                fig, ax = plt.subplots(figsize=(6, 4))
+                ax.bar(list(voltage_levels.keys()), list(voltage_levels.values()), color='#007bff')
+                ax.set_ylabel('Quantidade')
+                ax.set_title('Barras por Tensão Nominal')
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
+                plt.close()
+        
+        # Exportar dados
+        st.markdown("---")
+        st.subheader("📤 Exportar Dados")
+        
+        if st.button("📊 Exportar Resultados CSV"):
+            if st.session_state.simulation_results:
+                bus_df = pd.DataFrame([
+                    {
+                        "Barra": st.session_state.ps_model.buses[bid].label,
+                        "V_pu": data['vm_pu'],
+                        "Angulo_deg": data['va_degree'],
+                        "P_MW": data['p_mw'],
+                        "Q_MVAr": data['q_mvar']
+                    }
+                    for bid, data in st.session_state.simulation_results["buses"].items()
+                ])
+                csv = bus_df.to_csv(index=False)
+                st.download_button("📥 Download CSV", csv, "resultados_fluxo_potencia.csv", "text/csv", use_container_width=True)
+            elif st.session_state.simple_results:
+                df = pd.DataFrame(st.session_state.simple_results['elementos'])
+                csv = df.to_csv(index=False)
+                st.download_button("📥 Download CSV", csv, "resultados_simplificados.csv", "text/csv", use_container_width=True)
+    else:
+        st.info("👈 Adicione elementos ao sistema para ver estatísticas")
+
+with tab5:
+    st.subheader("ℹ️ Informações e Ajuda")
     
-    with tab2:
-        if st.session_state.ps_model.lines:
-            line_df = pd.DataFrame([
-                {"ID": l.id, "De": l.source, "Para": l.target, "Comprimento (km)": l.length_km, "Tipo": l.std_type, "Paralelo": l.parallel, "Em Serviço": "✅" if l.in_service else "❌"}
-                for l in st.session_state.ps_model.lines.values()
-            ])
-            st.dataframe(line_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("ℹ️ Nenhuma linha adicionada")
+    st.markdown("""
+    ### Power System Studio v4.0
     
-    with tab3:
-        if st.session_state.ps_model.transformers:
-            trafo_df = pd.DataFrame([
-                {"ID": t.id, "Primário": t.source, "Secundário": t.target, "Tipo": t.std_type, "Tap": t.tap_pos, "Em Serviço": "✅" if t.in_service else "❌"}
-                for t in st.session_state.ps_model.transformers.values()
-            ])
-            st.dataframe(trafo_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("ℹ️ Nenhum transformador adicionado")
+    **Sistema Integrado para Análise de Sistemas Elétricos de Potência**
     
-    with tab4:
-        if st.session_state.ps_model.loads:
-            load_df = pd.DataFrame([
-                {"ID": l.id, "Nome": l.label, "Barra": l.parent_bus, "P (MW)": l.p_mw, "Q (MVAr)": l.q_mvar, "Escala": l.scaling}
-                for l in st.session_state.ps_model.loads.values()
-            ])
-            st.dataframe(load_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("ℹ️ Nenhuma carga adicionada")
+    ### 🎯 Características Principais:
     
-    with tab5:
-        if st.session_state.ps_model.generators:
-            gen_df = pd.DataFrame([
-                {"ID": g.id, "Nome": g.label, "Barra": g.parent_bus, "P (MW)": g.p_mw, "V (pu)": g.vm_pu, "Q mín (MVAr)": g.min_q_mvar, "Q máx (MVAr)": g.max_q_mvar}
-                for g in st.session_state.ps_model.generators.values()
-            ])
-            st.dataframe(gen_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("ℹ️ Nenhum gerador adicionado")
+    1. **Modelagem Avançada**
+       - Barras (Slack, PV, PQ)
+       - Geradores com controle de tensão
+       - Cargas ativas e reativas
+       - Linhas de transmissão com parâmetros reais
+       - Transformadores com controle de tap
+    
+    2. **Análises Disponíveis**
+       - Fluxo de potência (métodos NR e simplificado)
+       - Cálculo de curto-circuito
+       - Detecção de violações
+       - Análise de carregamento
+    
+    3. **Visualização**
+       - Diagramas interativos (Plotly)
+       - Diagramas clássicos (Matplotlib)
+       - Resultados em tempo real
+       - Gráficos e métricas
+    
+    ### 🚀 Como usar:
+    
+    1. **Adicionar Elementos**: Use o painel lateral para criar seu sistema
+    2. **Configurar**: Ajuste parâmetros de cada elemento
+    3. **Conectar**: Estabeleça conexões entre elementos
+    4. **Simular**: Execute análises de fluxo de potência
+    5. **Analisar**: Visualize resultados e estatísticas
+    
+    ### 📊 Métodos de Cálculo:
+    
+    - **Pandapower (Avançado)**: Algoritmo Newton-Raphson completo
+    - **Simplificado**: Cálculos rápidos para estimativas
+    
+    ### 💾 Gerenciamento:
+    
+    - Salve seus projetos em JSON
+    - Carregue projetos existentes
+    - Exporte resultados para CSV
+    
+    ### 🔧 Requisitos:
+    
+    - Python 3.8+
+    - Streamlit
+    - Pandapower
+    - Plotly
+    - Matplotlib
+    
+    ### 📚 Recursos:
+    
+    - [Documentação Pandapower](https://pandapower.readthedocs.io/)
+    - [IEEE Power Systems](https://www.ieee.org/)
+    - [Tutoriais de Sistemas de Potência](https://www.powerworld.com/)
+    
+    ---
+    
+    **Desenvolvido para engenheiros e estudantes de sistemas elétricos de potência**
+    
+    Versão 4.0 | © 2024 Power System Studio
+    """)
 
 # ============================================================================
 # EXEMPLOS RÁPIDOS
 # ============================================================================
 
 with st.expander("🚀 Exemplos Rápidos - Carregar Sistema Padrão"):
-    st.markdown("### Sistemas IEEE de Teste")
+    st.markdown("### Sistemas de Teste")
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -1158,10 +1511,10 @@ with st.expander("🚀 Exemplos Rápidos - Carregar Sistema Padrão"):
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; font-size: 0.9rem; padding: 1rem;">
-    <strong>Power System Studio v3.0</strong> | Arquitetura Profissional<br>
-    🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit<br>
+    <strong>Power System Studio v4.0</strong> | Sistema Integrado Avançado<br>
+    🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit + Plotly + Matplotlib<br>
     Desenvolvido para análise técnica de sistemas elétricos de potência<br>
     <br>
-    <em>Funcionalidades: Fluxo de Potência • Curto-Circuito • Validação Elétrica • Detecção de Violações</em>
+    <em>Funcionalidades: Fluxo de Potência • Curto-Circuito • Validação Elétrica • Detecção de Violações • Análise Simplificada</em>
 </div>
 """, unsafe_allow_html=True)
