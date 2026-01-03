@@ -564,6 +564,10 @@ def init_session_state():
         st.session_state.simulation_results = None
     if "show_validation" not in st.session_state:
         st.session_state.show_validation = False
+    if "custom_voltage" not in st.session_state:
+        st.session_state.custom_voltage = 138.0
+    if "voltage_mode" not in st.session_state:
+        st.session_state.voltage_mode = "Tensões Padrão"
 
 init_session_state()
 
@@ -607,20 +611,43 @@ with st.sidebar:
             with col2:
                 y = st.number_input("Posição Y", value=0.0, step=10.0)
             
-            # Tensão nominal com opção personalizada
-            standard_voltages = LibraryManager.get_standard_voltages()
-            voltage_options = ["Personalizado"] + [f"{v} kV" for v in standard_voltages]
-            selected_voltage = st.selectbox("Tensão Nominal", voltage_options, index=5)  # índice 5 = 138 kV
+            # Tensão nominal com seletor manual (slider)
+            st.markdown("**Tensão Nominal**")
+            voltage_mode = st.radio(
+                "Modo de seleção:",
+                ["Tensões Padrão", "Ajuste Manual"],
+                horizontal=True,
+                key="voltage_mode"
+            )
             
-            if selected_voltage == "Personalizado":
-                col_v1, col_v2 = st.columns([1, 3])
-                with col_v1:
-                    vn_kv = st.number_input("kV", value=138.0, min_value=0.4, step=1.0)
-                with col_v2:
-                    st.markdown("<br><small>Digite o valor personalizado</small>", unsafe_allow_html=True)
+            if voltage_mode == "Tensões Padrão":
+                standard_voltages = LibraryManager.get_standard_voltages()
+                voltage_labels = {v: f"{v} kV" for v in standard_voltages}
+                
+                # Usar 138 kV como padrão
+                default_voltage = 138.0 if 138.0 in standard_voltages else standard_voltages[0]
+                
+                vn_kv = st.select_slider(
+                    "Selecione a tensão:",
+                    options=standard_voltages,
+                    value=default_voltage,
+                    format_func=lambda x: f"{x} kV",
+                    key="voltage_standard_slider"
+                )
+                st.success(f"✅ Tensão selecionada: **{vn_kv} kV**")
             else:
-                vn_kv = float(selected_voltage.replace(" kV", ""))
-                st.info(f"Tensão selecionada: {vn_kv} kV")
+                # Modo manual com slider contínuo
+                vn_kv = st.slider(
+                    "Ajuste a tensão (kV):",
+                    min_value=0.4,
+                    max_value=500.0,
+                    value=st.session_state.get('custom_voltage', 138.0),
+                    step=0.1,
+                    format="%.1f kV",
+                    key="voltage_manual_slider"
+                )
+                st.session_state.custom_voltage = vn_kv
+                st.info(f"ℹ️ Tensão personalizada: **{vn_kv} kV**")
             
             bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"], 
                                    help="Slack: Barra de referência\nPV: Barra de geração com controle de tensão\nPQ: Barra de carga")
@@ -1130,7 +1157,7 @@ with st.expander("🚀 Exemplos Rápidos - Carregar Sistema Padrão"):
 
 st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #666; padding: 1rem;">
+<div style="text-align: center; color: #666; font-size: 0.9rem; padding: 1rem;">
     <strong>Power System Studio v3.0</strong> | Arquitetura Profissional<br>
     🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit<br>
     Desenvolvido para análise técnica de sistemas elétricos de potência<br>
