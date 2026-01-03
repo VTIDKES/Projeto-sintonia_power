@@ -10,8 +10,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch, Circle, FancyArrowPatch
+import plotly.express as px
 import pandapower as pp
 import json
 from datetime import datetime
@@ -424,16 +423,6 @@ class LibraryManager:
     @staticmethod
     def get_standard_voltages() -> List[float]:
         return [0.4, 13.8, 34.5, 69.0, 88.0, 138.0, 230.0, 345.0, 500.0]
-    
-    @staticmethod
-    def get_impedance_line_types() -> List[Dict]:
-        return [
-            {"name": "AL-7 (25 mm²)", "R": 0.12, "X": 0.08, "B": 0.0001, "I_max": 100},
-            {"name": "AL-19 (50 mm²)", "R": 0.06, "X": 0.07, "B": 0.0002, "I_max": 150},
-            {"name": "AL-37 (95 mm²)", "R": 0.03, "X": 0.06, "B": 0.0003, "I_max": 220},
-            {"name": "AL-61 (150 mm²)", "R": 0.02, "X": 0.05, "B": 0.0004, "I_max": 300},
-            {"name": "AL-91 (240 mm²)", "R": 0.012, "X": 0.04, "B": 0.0005, "I_max": 400}
-        ]
 
 # ============================================================================
 # VISUALIZAÇÃO
@@ -553,67 +542,6 @@ def create_network_diagram(model: PowerSystemModel, results: Optional[Dict] = No
     )
     return fig
 
-def desenhar_diagrama_matplotlib(model):
-    """Desenha o diagrama do sistema usando matplotlib"""
-    if not model.buses:
-        return None
-    
-    fig, ax = plt.subplots(figsize=(14, 8))
-    ax.set_xlim(-1, 11)
-    ax.set_ylim(-1, 11)
-    ax.set_aspect('equal')
-    ax.grid(True, alpha=0.3)
-    ax.set_xlabel('Posição X', fontsize=12)
-    ax.set_ylabel('Posição Y', fontsize=12)
-    ax.set_title('Diagrama do Sistema Elétrico', fontsize=16, fontweight='bold')
-    
-    # Cores por tipo
-    cores = {
-        'slack': '#FF6B6B',
-        'pv': '#4ECDC4',
-        'pq': '#95E1D3',
-        'load': '#F38181',
-        'generator': '#FFA07A'
-    }
-    
-    # Desenhar conexões (linhas)
-    for line in model.lines.values():
-        if line.source in model.buses and line.target in model.buses:
-            origem = model.buses[line.source]
-            destino = model.buses[line.target]
-            ax.plot([origem.x, destino.x], [origem.y, destino.y], 'k-', linewidth=2, alpha=0.6)
-            
-            arrow = FancyArrowPatch((origem.x, origem.y), (destino.x, destino.y),
-                                   arrowstyle='->', mutation_scale=20, 
-                                   linewidth=2, color='black', alpha=0.6)
-            ax.add_patch(arrow)
-    
-    # Desenhar barras
-    for bus in model.buses.values():
-        x, y = bus.x, bus.y
-        cor = cores.get(bus.bus_type, '#CCCCCC')
-        
-        if bus.bus_type == 'slack':
-            circle = Circle((x, y), 0.4, color=cor, ec='black', linewidth=2, zorder=10)
-            ax.add_patch(circle)
-            ax.text(x, y, '~', fontsize=20, ha='center', va='center', fontweight='bold')
-        elif bus.bus_type == 'pv':
-            rect = FancyBboxPatch((x-0.5, y-0.2), 1, 0.4, 
-                                 boxstyle="round,pad=0.05", 
-                                 color=cor, ec='black', linewidth=2, zorder=10)
-            ax.add_patch(rect)
-            ax.text(x, y, 'PV', fontsize=12, ha='center', va='center', fontweight='bold')
-        else:  # pq
-            circle = Circle((x, y), 0.3, color=cor, ec='black', linewidth=2, zorder=10)
-            ax.add_patch(circle)
-            ax.text(x, y, 'PQ', fontsize=10, ha='center', va='center')
-        
-        # Nome da barra
-        ax.text(x, y-0.8, bus.label, fontsize=10, ha='center', 
-               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    return fig
-
 def display_violations(violations: List[Dict]):
     if not violations:
         st.success("✅ Nenhuma violação detectada!")
@@ -716,8 +644,6 @@ def init_session_state():
         st.session_state.custom_voltage = 138.0
     if "voltage_mode" not in st.session_state:
         st.session_state.voltage_mode = "Tensões Padrão"
-    if "view_mode" not in st.session_state:
-        st.session_state.view_mode = "Plotly"
     if "simulation_mode" not in st.session_state:
         st.session_state.simulation_mode = "Pandapower"
 
@@ -1005,14 +931,6 @@ with st.sidebar:
     # SIMULAÇÃO
     st.header("⚡ Simulação")
     
-    # Modo de visualização
-    st.subheader("🎨 Visualização")
-    st.session_state.view_mode = st.radio(
-        "Tipo de diagrama:",
-        ["Plotly (Interativo)", "Matplotlib (Clássico)"],
-        horizontal=True
-    )
-    
     # Modo de simulação
     st.subheader("📊 Método de Cálculo")
     st.session_state.simulation_mode = st.selectbox(
@@ -1070,16 +988,8 @@ with tab1:
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        if st.session_state.view_mode == "Plotly (Interativo)":
-            fig = create_network_diagram(st.session_state.ps_model, st.session_state.simulation_results)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
-        else:
-            fig = desenhar_diagrama_matplotlib(st.session_state.ps_model)
-            if fig:
-                st.pyplot(fig)
-                plt.close()
-            else:
-                st.info("👈 Use o painel lateral para adicionar elementos ao sistema")
+        fig = create_network_diagram(st.session_state.ps_model, st.session_state.simulation_results)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
     
     with col2:
         st.markdown("### 🎨 Legenda")
@@ -1265,32 +1175,33 @@ with tab3:
         with col2:
             st.metric("Potência Reativa Consumida (Q)", f"{res['Q_carga']:.2f} MVAr")
         
-        # Gráficos
+        # Gráficos com Plotly
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader("Distribuição de Potência Ativa")
-            fig, ax = plt.subplots(figsize=(6, 4))
             labels = ['Gerada', 'Consumida', 'Perdas']
             sizes = [res['P_gerada'], res['P_carga'], res['P_perdas']]
             colors = ['#FF6B6B', '#4ECDC4', '#FFA07A']
-            ax.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors, startangle=90)
-            ax.axis('equal')
-            st.pyplot(fig)
-            plt.close()
+            
+            fig = go.Figure(data=[go.Pie(labels=labels, values=sizes, hole=0.3)])
+            fig.update_traces(marker=dict(colors=colors))
+            fig.update_layout(showlegend=True)
+            st.plotly_chart(fig, use_container_width=True)
         
         with col2:
             st.subheader("Composição do Sistema")
-            fig, ax = plt.subplots(figsize=(6, 4))
             labels = ['Geradores', 'Cargas', 'Barramentos', 'Linhas', 'Transformadores']
             sizes = [res['n_geradores'], res['n_cargas'], res['n_barramentos'], res['n_linhas'], res['n_transformers']]
             colors = ['#FF6B6B', '#95E1D3', '#4ECDC4', '#F38181', '#FFA07A']
-            ax.bar(labels, sizes, color=colors)
-            ax.set_ylabel('Quantidade')
-            ax.set_title('Elementos do Sistema')
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
-            plt.close()
+            
+            fig = go.Figure(data=[go.Bar(x=labels, y=sizes, marker_color=colors)])
+            fig.update_layout(
+                xaxis_title="Elementos",
+                yaxis_title="Quantidade",
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("👈 Use o botão 'Calcular Fluxo de Potência' no painel lateral")
 
@@ -1329,14 +1240,14 @@ with tab4:
             
             with col1:
                 st.subheader("Distribuição por Tipo de Barra")
-                fig, ax = plt.subplots(figsize=(6, 4))
                 labels = [f"{k.upper()} ({v})" for k, v in bus_types.items()]
                 sizes = list(bus_types.values())
                 colors = ['#FF6B6B', '#4ECDC4', '#95E1D3'][:len(sizes)]
-                ax.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors, startangle=90)
-                ax.axis('equal')
-                st.pyplot(fig)
-                plt.close()
+                
+                fig = go.Figure(data=[go.Pie(labels=labels, values=sizes, hole=0.3)])
+                fig.update_traces(marker=dict(colors=colors))
+                fig.update_layout(showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
             
             with col2:
                 st.subheader("Distribuição por Nível de Tensão")
@@ -1345,13 +1256,17 @@ with tab4:
                     level = f"{bus.vn_kv:.0f} kV"
                     voltage_levels[level] = voltage_levels.get(level, 0) + 1
                 
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.bar(list(voltage_levels.keys()), list(voltage_levels.values()), color='#007bff')
-                ax.set_ylabel('Quantidade')
-                ax.set_title('Barras por Tensão Nominal')
-                plt.xticks(rotation=45)
-                st.pyplot(fig)
-                plt.close()
+                fig = go.Figure(data=[go.Bar(
+                    x=list(voltage_levels.keys()),
+                    y=list(voltage_levels.values()),
+                    marker_color='#007bff'
+                )])
+                fig.update_layout(
+                    xaxis_title="Tensão Nominal",
+                    yaxis_title="Quantidade",
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
         
         # Exportar dados
         st.markdown("---")
@@ -1403,7 +1318,6 @@ with tab5:
     
     3. **Visualização**
        - Diagramas interativos (Plotly)
-       - Diagramas clássicos (Matplotlib)
        - Resultados em tempo real
        - Gráficos e métricas
     
@@ -1428,11 +1342,9 @@ with tab5:
     
     ### 🔧 Requisitos:
     
-    - Python 3.8+
-    - Streamlit
-    - Pandapower
-    - Plotly
-    - Matplotlib
+    ```bash
+    pip install streamlit pandas numpy plotly pandapower
+    ```
     
     ### 📚 Recursos:
     
@@ -1512,7 +1424,7 @@ st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; font-size: 0.9rem; padding: 1rem;">
     <strong>Power System Studio v4.0</strong> | Sistema Integrado Avançado<br>
-    🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit + Plotly + Matplotlib<br>
+    🔧 Núcleo: Python + Pandapower | 🎨 Interface: Streamlit + Plotly<br>
     Desenvolvido para análise técnica de sistemas elétricos de potência<br>
     <br>
     <em>Funcionalidades: Fluxo de Potência • Curto-Circuito • Validação Elétrica • Detecção de Violações • Análise Simplificada</em>
