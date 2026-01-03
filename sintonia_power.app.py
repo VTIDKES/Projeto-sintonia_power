@@ -622,6 +622,7 @@ with st.sidebar:
             
             if voltage_mode == "Tensões Padrão":
                 standard_voltages = LibraryManager.get_standard_voltages()
+                voltage_labels = {v: f"{v} kV" for v in standard_voltages}
                 
                 # Usar 138 kV como padrão
                 default_voltage = 138.0 if 138.0 in standard_voltages else standard_voltages[0]
