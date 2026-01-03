@@ -565,7 +565,9 @@ def init_session_state():
     if "show_validation" not in st.session_state:
         st.session_state.show_validation = False
     if "custom_voltage" not in st.session_state:
-        st.session_state.custom_voltage = 138.0  # Valor padrão para tensão personalizada
+        st.session_state.custom_voltage = 138.0
+    if "voltage_mode" not in st.session_state:
+        st.session_state.voltage_mode = "Tensões Padrão"
 
 init_session_state()
 
@@ -609,38 +611,42 @@ with st.sidebar:
             with col2:
                 y = st.number_input("Posição Y", value=0.0, step=10.0)
             
-            # Tensão nominal com opção personalizada - CORRIGIDO
-            standard_voltages = LibraryManager.get_standard_voltages()
-            voltage_options = ["Personalizado"] + [f"{v} kV" for v in standard_voltages]
-            
-            # Usar um índice padrão (138 kV)
-            default_index = 5  # 138 kV
-            
-            selected_voltage_option = st.selectbox(
-                "Tensão Nominal", 
-                voltage_options, 
-                index=default_index,
-                key="voltage_select"
+            # Tensão nominal com seletor manual (slider)
+            st.markdown("**Tensão Nominal**")
+            voltage_mode = st.radio(
+                "Modo de seleção:",
+                ["Tensões Padrão", "Ajuste Manual"],
+                horizontal=True,
+                key="voltage_mode"
             )
             
-            vn_kv = 138.0  # Valor padrão
-            
-            # Se selecionou "Personalizado", mostrar campo numérico
-            if selected_voltage_option == "Personalizado":
-                vn_kv = st.number_input(
-                    "Tensão Personalizada (kV)", 
-                    value=st.session_state.custom_voltage, 
-                    min_value=0.4, 
-                    max_value=1000.0,
-                    step=1.0,
-                    key="custom_voltage_input"
+            if voltage_mode == "Tensões Padrão":
+                standard_voltages = LibraryManager.get_standard_voltages()
+                
+                # Usar 138 kV como padrão
+                default_voltage = 138.0 if 138.0 in standard_voltages else standard_voltages[0]
+                
+                vn_kv = st.select_slider(
+                    "Selecione a tensão:",
+                    options=standard_voltages,
+                    value=default_voltage,
+                    format_func=lambda x: f"{x} kV",
+                    key="voltage_standard_slider"
                 )
-                # Atualizar valor na sessão
-                st.session_state.custom_voltage = vn_kv
+                st.success(f"✅ Tensão selecionada: **{vn_kv} kV**")
             else:
-                # Extrair o valor numérico da string selecionada
-                vn_kv = float(selected_voltage_option.replace(" kV", ""))
-                st.info(f"Tensão selecionada: {vn_kv} kV")
+                # Modo manual com slider contínuo
+                vn_kv = st.slider(
+                    "Ajuste a tensão (kV):",
+                    min_value=0.4,
+                    max_value=500.0,
+                    value=st.session_state.get('custom_voltage', 138.0),
+                    step=0.1,
+                    format="%.1f kV",
+                    key="voltage_manual_slider"
+                )
+                st.session_state.custom_voltage = vn_kv
+                st.info(f"ℹ️ Tensão personalizada: **{vn_kv} kV**")
             
             bus_type = st.selectbox("Tipo", ["pq", "pv", "slack"], 
                                    help="Slack: Barra de referência\nPV: Barra de geração com controle de tensão\nPQ: Barra de carga")
