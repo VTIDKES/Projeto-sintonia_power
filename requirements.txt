@@ -1,7 +1,5 @@
 streamlit
-pandapower
 pandas
 numpy
 plotly
-openpyxl
-networkx
+pandapower
