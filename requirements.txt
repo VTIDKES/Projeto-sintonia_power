@@ -3,3 +3,4 @@ pandas
 numpy
 plotly
 pandapower
+streamlit-flow-component==1.6.1
