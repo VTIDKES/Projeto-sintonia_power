@@ -1216,3 +1216,22 @@ def main():
     init_state()
     
     page = render_sidebar()
+    
+    # Roteamento de páginas
+    if page == "Dashboard":
+        page_dashboard()
+    elif page == "Dados":
+        page_system_data()
+    elif page == "Simulações":
+        page_simulations()
+    elif page == "Resultados":
+        page_results()
+    elif page == "Ferramentas":
+        page_tools()
+    elif page == "Import/Export":
+        page_import_export()
+    else:
+        page_about()
+
+if __name__ == "__main__":
+    main()
