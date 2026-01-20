@@ -751,7 +751,59 @@ def show_system_statistics(t):
     col1, col2, col3 = st.columns(3)
     col1.metric("Geração Total", f"{total_gen:.2f} MW")
     col2.metric("Carga Total", f"{total_load:.2f} MW")
-    col3.metric("Balanço", f"{total_gen - total_load:.2f} MW") = st.selectbox("Barra de Conexão", bus_names, key="new_load_bus")
+    col3.metric("Balanço", f"{total_gen - total_load:.2f} MW")
+
+def page_about():
+    st.title("ℹ️ Sobre o Sistema")
+    st.markdown("""
+    ## Power System Professional Studio v2.0
+    
+    ### Sistema Completo de Análise de Redes Elétricas
+    
+    #### 🎯 Recursos Implementados:
+    - ✅ **Seleção por Dropdown**: Todas as conexões usam seleção inteligente
+    - ✅ **Simulações Completas**: Fluxo de potência, curto-circuito, contingências
+    - ✅ **Dimensionamento**: Seleção automática de condutores
+    - ✅ **Calculadora**: Ferramentas de cálculo elétrico
+    - ✅ **Visualizações**: Gráficos interativos e dashboards
+    - ✅ **Validação**: Verificação automática de erros
+    
+    #### 📝 Como Usar:
+    1. **Dados do Sistema**: Configure barras e equipamentos
+    2. **Construir Rede**: Valide e construa o modelo
+    3. **Simulações**: Execute análises avançadas
+    4. **Resultados**: Visualize e exporte relatórios
+    
+    #### 🛠️ Tecnologias:
+    - Python 3.8+
+    - Streamlit
+    - Plotly
+    - Pandas / NumPy
+    
+    ---
+    
+    💡 **Dica:** Use os formulários com ➕ para adicionar equipamentos rapidamente.
+    """)
+
+# ═════════════════════════════════════════════════════════════════════════
+# APLICAÇÃO PRINCIPAL
+# ═════════════════════════════════════════════════════════════════════════
+
+def main():
+    init_state()
+    page = render_sidebar()
+    
+    if page == "Dashboard":
+        page_dashboard()
+    elif page == "Dados":
+        page_system_data()
+    elif page == "Simulações":
+        page_simulations()
+    else:
+        page_about()
+
+if __name__ == "__main__":
+    main() = st.selectbox("Barra de Conexão", bus_names, key="new_load_bus")
                 new_load_type = st.selectbox("Tipo", ["Industrial", "Commercial", "Residential"], key="new_load_type")
             with col2:
                 new_load_p = st.number_input("P (MW)", 0.0, 1000.0, 25.0, key="new_load_p")
